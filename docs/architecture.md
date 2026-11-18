@@ -224,6 +224,15 @@ Points bucket on a worker (`lib/charts/bucket.worker.ts`) into fixed widths per 
 
 `lib/stellar/generated/` is copied from the pinned `contracts` submodule by `scripts/sync-bindings.mjs`, with a do-not-edit header and `// @ts-nocheck`. CI fails if it's stale. `CATEGORY_TAGS` in `clients.ts` has a compile-time exhaustiveness check against the binding's `Category` type, so a contract enum change breaks the build rather than the UI.
 
+## Contract identities
+
+Every contract id the app can talk to is overridable with a `NEXT_PUBLIC_*` variable, so a forked or tampered build could silently route trades or payments elsewhere. Four pieces guard against that:
+
+- **Manifest.** Besides the raw `deployments.testnet.json`, the sync script generates `lib/stellar/generated/contract-manifest.ts`: network, contracts commit, a sha256 of the deployments file, and the canonical contract/account ids. `npm run check:bindings` fails when it is stale.
+- **Resolution.** `lib/stellar/config.ts` exports `IDENTITIES` (label, role, address, `source: "manifest" | "env"`, `matchesManifest` per key, including `paymentsRecipient`) and `BUILD_IDENTITY` (`{ canonical, overridden, manifestCommit }`). A build whose passphrase has no manifest (anything not testnet) is never canonical.
+- **Display.** `ContractIdentity` / `SigningIdentities` (`components/tx-review.tsx`) show the label, a role sentence, the full address in 4-character groups, a three-word fingerprint (`lib/stellar/fingerprint.ts`, first 33 bits of sha256(decoded StrKey payload) → three BIP-39 words, a UX aid against vanity addresses — see SECURITY.md), a source badge, and a Stellar Expert link. The premium payment dialog shows `paymentsRecipient` + `usdc` (with an "I checked these addresses" gate when overridden and a note when the recipient is the treasury); quick-view and copy-trade show `marketCore` + `usdc` before signing.
+- **Banner and build check.** `components/layout/BuildIdentityBanner.tsx` renders a persistent, non-dismissable banner on every page when `!BUILD_IDENTITY.canonical`, listing the overridden identities and every address. `next.config.ts` prints the same at build time, and `ORACLEDESK_REQUIRE_CANONICAL=1` (build-only env) fails the build instead.
+
 ## Rendering
 
 All routes prerender as static pages. Pages that read query parameters (`/markets/quick-view`, `/copy-trade`, `/reasoning/verify`) keep `useSearchParams` inside a `<Suspense>` boundary; without it the production build fails.

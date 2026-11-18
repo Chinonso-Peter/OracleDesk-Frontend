@@ -11,6 +11,7 @@ import { PwaRegistrar } from "@/components/pwa/pwa-registrar";
 import { DebugMount } from "@/components/debug/debug-mount";
 import { RpcDegradedBanner } from "@/components/debug/RpcPanel";
 import { NetworkConsistencyBanner } from "@/components/layout/NetworkConsistencyBanner";
+import { BuildIdentityBanner } from "@/components/layout/BuildIdentityBanner";
 import { CopyTradeReconciler } from "@/components/copy-trade/CopyTradeReconciler";
 import { WebVitals } from "@/app/web-vitals";
 
@@ -64,6 +65,7 @@ export default function RootLayout({
         >
           Skip to main content
         </a>
+        <BuildIdentityBanner />
         <PwaRegistrar>
           <WalletProvider>
             <CopyTradeReconciler />

@@ -1,7 +1,7 @@
 "use client";
 import { Icon } from "@/components/ui/icon";
 
-import { TxReview, TxReviewPreferenceControl, shouldSkipTxReview } from "@/components/tx-review";
+import { SigningIdentities, TxReview, TxReviewPreferenceControl, shouldSkipTxReview } from "@/components/tx-review";
 import type { ReviewModel } from "@/lib/stellar/tx-decode";
 import { useSubmitQueueState } from "@/lib/stellar/submit-queue";
 
@@ -733,6 +733,7 @@ function CopyTradeContent() {
                   {waitingForBuy ? "Waiting for your previous transaction to finish…" : statusMessage}
                 </div>
               )}
+              <SigningIdentities keys={["marketCore", "usdc"]} compact />
               <div className="flex gap-3">
                 <button
                   className="flex-1 border border-outline text-on-surface py-4 rounded-lg font-headline-sm text-headline-sm hover:bg-surface-variant transition-all"

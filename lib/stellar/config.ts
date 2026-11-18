@@ -1,5 +1,6 @@
 import { StrKey } from "@stellar/stellar-sdk";
 import deployments from "./generated/deployments.testnet.json";
+import { CONTRACT_MANIFEST } from "./generated/contract-manifest";
 
 /**
  * Network and contract configuration. Contract ids default to the synced
@@ -65,6 +66,122 @@ export const USDC_ASSET = env(
  * backend (see docs/api.md for why that is a product decision).
  */
 export const PAYMENTS_RECIPIENT = env(process.env.NEXT_PUBLIC_PAYMENTS_RECIPIENT, CONTRACTS.treasury, "PAYMENTS_RECIPIENT");
+
+/* ------------------------------------------------------------------ *
+ * Contract identities (issue #122)
+ *
+ * Every id above is a NEXT_PUBLIC_* override away from being an attacker's
+ * address, and wallet prompts show 56 characters nobody reads. IDENTITIES
+ * records what each configured id is, where it came from and whether it
+ * still matches the pinned deployment manifest
+ * (lib/stellar/generated/contract-manifest.ts); BUILD_IDENTITY summarises
+ * that for the banner and the build-time check in next.config.ts.
+ * ------------------------------------------------------------------ */
+
+export type IdentityKey = keyof typeof CONTRACTS | "paymentsRecipient";
+
+export interface IdentityEntry {
+  key: IdentityKey;
+  label: string;
+  role: string;
+  address: string;
+  /** "manifest" = the pinned deployment's value; "env" = a NEXT_PUBLIC_* override. */
+  source: "manifest" | "env";
+  /** True when the address equals the manifest's value for a manifest it applies to. */
+  matchesManifest: boolean;
+}
+
+/** The manifest describes the testnet deployment; another passphrase has no manifest. */
+const MANIFEST_APPLIES =
+  NETWORK_PASSPHRASE === TESTNET_PASSPHRASE && CONTRACT_MANIFEST.network === "testnet";
+
+const IDENTITY_DEFS: ReadonlyArray<{
+  key: IdentityKey;
+  label: string;
+  role: string;
+  address: string;
+  sourceName: string;
+  canonical: string;
+}> = [
+  {
+    key: "marketCore",
+    label: "OracleDesk market contract",
+    role: "Holds market liquidity and executes every share buy and sell.",
+    address: CONTRACTS.marketCore,
+    sourceName: "CONTRACTS.marketCore",
+    canonical: CONTRACT_MANIFEST.contracts.marketCore,
+  },
+  {
+    key: "treasury",
+    label: "OracleDesk treasury",
+    role: "Holds protocol funds, including the capital the agent trades with.",
+    address: CONTRACTS.treasury,
+    sourceName: "CONTRACTS.treasury",
+    canonical: CONTRACT_MANIFEST.contracts.treasury,
+  },
+  {
+    key: "resolver",
+    label: "Resolver",
+    role: "Resolves markets once they end and pays out winning shares.",
+    address: CONTRACTS.resolver,
+    sourceName: "CONTRACTS.resolver",
+    canonical: CONTRACT_MANIFEST.contracts.resolver,
+  },
+  {
+    key: "reasoningRegistry",
+    label: "Reasoning registry",
+    role: "Stores the published AI reasoning traces behind each market call.",
+    address: CONTRACTS.reasoningRegistry,
+    sourceName: "CONTRACTS.reasoningRegistry",
+    canonical: CONTRACT_MANIFEST.contracts.reasoningRegistry,
+  },
+  {
+    key: "usdc",
+    label: "USDC (Stellar Asset Contract)",
+    role: "The contract your USDC balance and payments move through.",
+    address: CONTRACTS.usdc,
+    sourceName: "CONTRACTS.usdc",
+    canonical: CONTRACT_MANIFEST.contracts.usdc,
+  },
+  {
+    key: "paymentsRecipient",
+    label: "Premium payments recipient",
+    role: "Receives your daily pass payment in USDC.",
+    address: PAYMENTS_RECIPIENT,
+    sourceName: "PAYMENTS_RECIPIENT",
+    // The documented default: premium payments go to the treasury.
+    canonical: CONTRACT_MANIFEST.contracts.treasury,
+  },
+];
+
+export const IDENTITIES: Record<IdentityKey, IdentityEntry> = Object.fromEntries(
+  IDENTITY_DEFS.map((def) => [
+    def.key,
+    {
+      key: def.key,
+      label: def.label,
+      role: def.role,
+      address: def.address,
+      source: CONFIG_SOURCES[def.sourceName] === "env" ? ("env" as const) : ("manifest" as const),
+      matchesManifest: MANIFEST_APPLIES && def.address === def.canonical,
+    },
+  ]),
+) as Record<IdentityKey, IdentityEntry>;
+
+/**
+ * Summary of this build's contract addresses. `canonical` is false when any
+ * id differs from the manifest (an override) or when no manifest applies to
+ * the configured network — a non-testnet build is never claimed canonical.
+ * The non-dismissable banner and the `ORACLEDESK_REQUIRE_CANONICAL=1` build
+ * check both key off this.
+ */
+export const BUILD_IDENTITY: { canonical: boolean; overridden: IdentityKey[]; manifestCommit: string } = {
+  canonical: MANIFEST_APPLIES && IDENTITY_DEFS.every((def) => def.address === def.canonical),
+  overridden: IDENTITY_DEFS.filter((def) => !(MANIFEST_APPLIES && def.address === def.canonical)).map(
+    (def) => def.key,
+  ),
+  manifestCommit: CONTRACT_MANIFEST.contractsCommit,
+};
 
 /**
  * Admin G-addresses. This is a UI gate only: the backend enforces admin

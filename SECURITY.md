@@ -34,3 +34,26 @@ the backend (report to
 [OracleDesk-Backend](https://github.com/OracleDesk/OracleDesk-Backend)), and
 third-party dependencies unless this repo's use of them is what's
 exploitable.
+
+## How to verify what you're signing
+
+Wallet prompts show 56-character addresses that are easy to misread, and any
+`NEXT_PUBLIC_*` variable can redirect a build to a look-alike contract. The
+app therefore shows, before every signature and in a banner whenever the
+build is non-canonical:
+
+- the **full contract address** in 4-character groups (compare the middle of
+  the address, not just the ends — truncation is what vanity-address
+  attackers grind for);
+- a **three-word fingerprint** derived from the SHA-256 of the decoded
+  address (first 33 bits → three words from a fixed 2048-word list). This is
+  a **UX aid, not a cryptographic guarantee**: it makes comparison fast and
+  cheap to do consistently, but it proves nothing on its own;
+- the **source**: "Official deployment @\<commit\>" (the pinned manifest in
+  `lib/stellar/generated/contract-manifest.ts`) or "Overridden by this
+  build".
+
+When the amount matters, cross-check the address against an independent
+source such as [Stellar Expert](https://stellar.expert/explorer/testnet) or
+the deployment recorded in the contracts repository. Official builds can be
+made to fail at build time instead of warning (`ORACLEDESK_REQUIRE_CANONICAL=1`).

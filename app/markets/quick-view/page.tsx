@@ -20,6 +20,7 @@ import { Sparkline } from "@/components/charts/sparkline";
 import { MIN_TX_TIMEOUT_S, SAFETY_MARGIN_S } from "@/lib/stellar/deadline";
 import { TradeTape } from "@/components/market/trade-tape";
 import { BuyTicket } from "@/components/market/buy-ticket";
+import { SigningIdentities } from "@/components/tx-review";
 import { DevProfiler } from "@/lib/dev/profiler";
 import { ledgerClock, useLedgerClock } from "@/lib/stellar/ledger-clock";
 import { PushVerifiedStatus } from "@/components/push-verified-status";
@@ -342,7 +343,10 @@ function MarketQuickViewContent() {
 
             {/* Buy */}
             {onChainMarketId !== null && (
-              <BuyTicket onChainMarketId={onChainMarketId} side={side} amountInputRef={amountInputRef} />
+              <>
+                <SigningIdentities keys={["marketCore", "usdc"]} compact />
+                <BuyTicket onChainMarketId={onChainMarketId} side={side} amountInputRef={amountInputRef} />
+              </>
             )}
 
             {view && <CreatorPanel view={view} seed={backendSeed(view.market, market)} />}
