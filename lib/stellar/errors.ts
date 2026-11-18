@@ -2,9 +2,12 @@ import { Errors as MarketCoreErrors } from "./generated/market-core";
 import { Errors as TreasuryErrors } from "./generated/treasury";
 import { Errors as ResolverErrors } from "./generated/resolver";
 import { Errors as ReasoningRegistryErrors } from "./generated/reasoning-registry";
-import { NETWORK_LABEL } from "./config";
+import { StrKey } from "@stellar/stellar-sdk";
+import type { rpc } from "@stellar/stellar-sdk";
+import { CONTRACTS, NETWORK_LABEL } from "./config";
 
 export type ContractName = "marketCore" | "treasury" | "resolver" | "reasoningRegistry";
+export type ErrorContract = ContractName | "usdc";
 
 const TABLES: Record<ContractName, Record<number, { message: string }>> = {
   marketCore: MarketCoreErrors,
@@ -94,7 +97,12 @@ export const FRIENDLY: Record<string, string> = {
 export const FRIENDLY_NAMES = Object.keys(FRIENDLY) as readonly string[];
 export const UNFRIENDLY_ALLOWLIST = ["NotInitialized", "InvalidConfig"] as const;
 
-import type { rpc } from "@stellar/stellar-sdk";
+export interface ErrorContext {
+  /** Contract the call targeted; used when diagnostic events cannot attribute the error. */
+  contract?: ContractName;
+  simulation?: { error?: string; events?: readonly unknown[] };
+  errorResult?: unknown;
+}
 
 export interface DescribedError {
   kind:
@@ -111,12 +119,15 @@ export interface DescribedError {
     | "network"
     | "submission"
     | "expired"
+    | "archived"
     | "bad-auth"
     | "unknown";
   message: string;
   action?: "enable-usdc";
   /** Contract error name, e.g. "SlippageExceeded", or tx result code when known. */
   code?: string;
+  /** Contract the error was attributed to, when known. */
+  contract?: ErrorContract;
 }
 
 export interface TxDescribedError extends DescribedError {
@@ -144,10 +155,192 @@ function safeJson(v: unknown): string {
   }
 }
 
+
+const USDC_KINDS: Record<number, "insufficient-balance" | "no-trustline"> = {
+  10: "insufficient-balance",
+  13: "no-trustline",
+};
+
+/** `name` of an SDK/wallet error, without relying on `instanceof` across bundles. */
+function errorName(err: unknown): string {
+  if (!err || typeof err !== "object") return "";
+  const named = (err as { name?: unknown }).name;
+  if (typeof named === "string" && named) return named;
+  const ctor = (err as { constructor?: { name?: unknown } }).constructor;
+  return typeof ctor?.name === "string" ? ctor.name : "";
+}
+
+function scSymbol(value: unknown): string | null {
+  try {
+    const val = value as { switch?: () => { name: string }; sym?: () => unknown };
+    if (val.switch?.().name !== "scvSymbol") return null;
+    const sym = val.sym?.();
+    if (typeof sym === "string") return sym;
+    if (sym && typeof sym === "object") {
+      const bytes = sym as { toString?: (encoding?: string) => string };
+      const decoded = bytes.toString?.("utf8");
+      if (typeof decoded === "string") return decoded;
+    }
+  } catch {
+    // not a symbol
+  }
+  return null;
+}
+
+export interface ContractErrorLocation {
+  contractId: string;
+  code: number;
+}
+
+/**
+ * Reads the innermost contract error out of a diagnostic event: the last event
+ * whose first topic is the `error` symbol and whose data is an `ScError` of
+ * type `sceContract`. Nested calls (a SAC transfer inside market_core) emit
+ * their own event, so the last one wins.
+ */
+export function contractErrorFromEvents(events: readonly unknown[] | undefined): ContractErrorLocation | null {
+  if (!events?.length) return null;
+  let found: ContractErrorLocation | null = null;
+  for (const event of events) {
+    const direct = event as { contractId?: unknown; code?: unknown };
+    if (typeof direct?.contractId === "string" && typeof direct?.code === "number") {
+      found = { contractId: direct.contractId, code: direct.code };
+      continue;
+    }
+    try {
+      const diagnostic = event as { event?: () => unknown };
+      const contractEvent = (typeof diagnostic?.event === "function" ? diagnostic.event() : event) as {
+        contractId?: () => unknown;
+        body?: () => { v0?: () => unknown; value?: () => unknown };
+      };
+      if (!contractEvent?.body) continue;
+      const body = contractEvent.body();
+      const v0 = (body?.v0 ? body.v0() : body?.value?.()) as {
+        topics?: () => unknown[];
+        data?: () => unknown;
+      } | undefined;
+      const topics = v0?.topics?.() ?? [];
+      if (!topics.some((topic) => scSymbol(topic) === "error")) continue;
+      const data = v0?.data?.() as { switch?: () => { name: string }; error?: () => unknown };
+      if (data?.switch?.().name !== "scvError") continue;
+      const scError = data.error?.() as { switch?: () => { name: string }; contractCode?: () => number };
+      if (scError?.switch?.().name !== "sceContract") continue;
+      const id = contractEvent.contractId?.();
+      if (!id) continue;
+      const contractId = StrKey.encodeContract(id as unknown as Buffer);
+      found = { contractId, code: Number(scError.contractCode?.() ?? 0) };
+    } catch {
+      // A malformed or non-diagnostic event must not break classification.
+    }
+  }
+  return found;
+}
+
+/** Maps a contract id to its configured role. */
+export function contractNameFor(contractId: string): ErrorContract | null {
+  for (const [name, id] of Object.entries(CONTRACTS)) {
+    if (id === contractId) return name as ErrorContract;
+  }
+  return null;
+}
+
+function resultCodeOf(errorResult: unknown): string | undefined {
+  try {
+    const result = (errorResult as { result?: () => { switch?: () => { name: string } } })?.result?.();
+    return result?.switch?.().name;
+  } catch {
+    return undefined;
+  }
+}
+
+function describeContractCode(name: string | undefined, code: number, contract: ErrorContract): DescribedError {
+  if (contract === "usdc") {
+    const kind = USDC_KINDS[code];
+    if (kind === "insufficient-balance") {
+      return { kind, code: "USDCInsufficientBalance", message: "You don't have enough USDC for this.", contract };
+    }
+    if (kind === "no-trustline") {
+      return {
+        kind,
+        code: "USDCNoTrustline",
+        message: "Your account has no USDC trustline. Add the USDC asset in your wallet first.",
+        action: "enable-usdc",
+        contract,
+      };
+    }
+    return { kind: "contract", code: `USDCError${code}`, message: `The USDC token contract rejected this (error ${code}).`, contract };
+  }
+  if (name) {
+    const message = CONTRACT_FRIENDLY[contract as ContractName]?.[name] ?? FRIENDLY[name] ?? `The contract rejected this (${name}).`;
+    return { kind: "contract", code: name, message, contract };
+  }
+  return { kind: "contract", code: `ContractError${code}`, message: `The contract rejected this (error ${code}).`, contract };
+}
+
+/** Structured SDK classes, checked by name so bundling does not matter. */
+function describeSdkClass(err: unknown): DescribedError | null {
+  const name = errorName(err);
+  const apiCode = err && typeof err === "object" ? (err as { code?: unknown }).code : undefined;
+  if (apiCode === "BACKEND_UNREACHABLE") {
+    return { kind: "network", message: "Couldn't reach the backend. Check your connection and try again." };
+  }
+  if (!name) return null;
+  if (/UserRejected|UserDeclined/i.test(name)) return { kind: "rejected", message: "You cancelled the request in your wallet." };
+  if (/NoSigner/i.test(name)) return { kind: "disconnected", message: "Your wallet has no signer for this account. Reconnect it and try again." };
+  if (/ExpiredState|RestoreFailure|RestoreError|RestorationFailure/i.test(name)) {
+    return {
+      kind: "archived",
+      code: "archived-entry",
+      message: "The transaction simulation is stale (archived entries or changed footprint). Prepare it again with a fresh quote.",
+    };
+  }
+  if (/ExternalService/i.test(name)) {
+    return { kind: "network", message: "Couldn't reach the Stellar network. Check your connection and try again." };
+  }
+  return null;
+}
+
 /** Turns anything thrown by the SDK, a binding or a wallet into a message for the user. */
-export function describeError(err: unknown, contract: ContractName = "marketCore"): DescribedError {
+export function describeError(err: unknown, ctxOrContract: ContractName | ErrorContext = "marketCore"): DescribedError {
   if (err instanceof UserFacingError) return err.described;
-  const text = textOf(err);
+  const ctx: ErrorContext = typeof ctxOrContract === "string" ? { contract: ctxOrContract } : ctxOrContract;
+  const contract: ContractName = ctx.contract ?? "marketCore";
+  const text = [textOf(err), ctx.simulation?.error ?? ""].filter(Boolean).join(" ").trim();
+
+  const resultCode = resultCodeOf(ctx.errorResult);
+  if (resultCode === "txBadSeq") {
+    return {
+      kind: "stale-sequence",
+      code: "txBadSeq",
+      message: "Another transaction from this account changed the sequence. Prepare it again with a fresh quote.",
+    };
+  }
+  if (resultCode === "txTooLate") {
+    return {
+      kind: "expired",
+      code: "tx_too_late",
+      message: "This transaction expired before it was submitted. Prepare it again with a fresh quote.",
+    };
+  }
+  if (resultCode === "txInsufficientFee") {
+    return {
+      kind: "submission",
+      code: "txInsufficientFee",
+      message: "The network fee bid was too low. Please try again with a higher fee.",
+    };
+  }
+  if (resultCode === "txInsufficientBalance") {
+    return { kind: "insufficient-xlm", code: "txInsufficientBalance", message: "You don't have enough spendable XLM to pay the network fee." };
+  }
+  if (resultCode === "txBadAuth" || resultCode === "txBadAuthExtra") {
+    return {
+      kind: "bad-auth",
+      code: resultCode === "txBadAuthExtra" ? "tx_bad_auth_extra" : "tx_bad_auth",
+      message: resultCode === "txBadAuthExtra"
+        ? "This transaction has extra signatures the network doesn't expect. Remove unknown signatures and try again."
+        : "This account needs more signatures to meet its threshold. Collect the remaining signatures before submitting.",
+    };
+  }
 
   if (classifySequenceError(err)) {
     return {
@@ -179,9 +372,21 @@ export function describeError(err: unknown, contract: ContractName = "marketCore
       message: "This transaction expired before it was submitted. Prepare it again with a fresh quote.",
     };
   }
+  const sdk = describeSdkClass(err);
+  if (sdk) return sdk;
+
+  // Attribute contract errors by the contract id in the diagnostic events
+  // before falling back to text matching (SAC codes collide with market-core's).
+  const attributed = contractErrorFromEvents(ctx.simulation?.events);
+  if (attributed) {
+    const role: ErrorContract = contractNameFor(attributed.contractId) ?? contract;
+    const name = role === "usdc" ? undefined : TABLES[role as ContractName]?.[attributed.code]?.message;
+    return describeContractCode(name, attributed.code, role);
+  }
+
   if (/archived|restore|expired.*footprint|footprint.*expired/i.test(text)) {
     return {
-      kind: "expired",
+      kind: "archived",
       code: "archived-entry",
       message: "The transaction simulation is stale (archived entries or changed footprint). Prepare it again with a fresh quote.",
     };
@@ -232,11 +437,7 @@ export function describeError(err: unknown, contract: ContractName = "marketCore
   const code = /Error\(Contract, #(\d+)\)/.exec(text);
   if (code) {
     const name = TABLES[contract][Number(code[1])]?.message;
-    if (name) {
-      const message = CONTRACT_FRIENDLY[contract]?.[name] ?? FRIENDLY[name] ?? `The contract rejected this (${name}).`;
-      return { kind: "contract", code: name, message };
-    }
-    return { kind: "contract", message: `The contract rejected this (error ${code[1]}).` };
+    return describeContractCode(name, Number(code[1]), contract);
   }
   // A binding Err may carry just the name.
   const named = Object.keys(FRIENDLY).find((n) => new RegExp(`\\b${n}\\b`).test(text));
@@ -350,7 +551,11 @@ export function describeSubmission(
         .join(" ")
     : "";
   const fullText = `${textOf(response)} ${diagText}`;
-  const described = describeError(fullText, contract);
+  const described = describeError(fullText, {
+    contract,
+    simulation: { error: textOf(response), events: response.diagnosticEvents as unknown[] | undefined },
+    errorResult: response.errorResult,
+  });
   if (described.kind !== "unknown") {
     return {
       ...described,

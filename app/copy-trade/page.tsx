@@ -11,6 +11,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { useWalletActions, useWalletAddress, useWalletNetwork } from "@/lib/contexts/WalletContext";
 import { DevProfiler } from "@/lib/dev/profiler";
 import { useTrace } from "@/lib/hooks/useTraces";
+import { useViewedAddress } from "@/lib/hooks/useViewedAddress";
 import { useCopyTrade } from "@/lib/hooks/useCopyTrade";
 import { PendingCopyTrades } from "@/components/copy-trade/PendingCopyTrades";
 import { ApiError } from "@/lib/api/client";
@@ -384,22 +385,6 @@ function CopyTradeContent() {
 
   return (
     <div className="bg-background text-on-surface min-h-screen flex flex-col">
-      <style jsx global>{`
-        .ai-shimmer {
-          background: linear-gradient(
-            90deg,
-            rgba(145, 215, 238, 0.1) 0%,
-            rgba(145, 215, 238, 0.2) 50%,
-            rgba(145, 215, 238, 0.1) 100%
-          );
-          background-size: 200% 100%;
-          animation: shimmer 3s infinite linear;
-        }
-        @keyframes shimmer {
-          0% { background-position: 200% 0; }
-          100% { background-position: -200% 0; }
-        }
-      `}</style>
 
       <main className="flex-grow flex items-center justify-center p-4 sm:p-margin relative">
         <LiveRegion message={statusMessage ?? ""} />

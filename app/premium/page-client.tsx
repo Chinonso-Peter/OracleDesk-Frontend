@@ -20,8 +20,8 @@ import { LiveRegion } from "@/components/ui/live-region";
 
 import { useWallet } from "@/lib/contexts/WalletContext";
 import { useUsdcTransfer, useAccountReserve, usePrepareUsdcTransfer, useAccountAuth, usePrepareMultisig } from "@/lib/hooks/useStellar";
-import { PAYMENTS_RECIPIENT, NETWORK_LABEL, NETWORK_PASSPHRASE, explorerTx } from "@/lib/stellar/config";
-import { formatUsdc, parseUsdc } from "@/lib/stellar/units";
+import { DAILY_PASS_PRICE_RAW, PAYMENTS_RECIPIENT, NETWORK_LABEL, NETWORK_PASSPHRASE, explorerTx } from "@/lib/stellar/config";
+import { formatUsdc } from "@/lib/stellar/units";
 import { TxPhase } from "@/lib/stellar/tx-lifecycle";
 import { isMultisigAccount, type MultisigSession } from "@/lib/stellar/multisig";
 import { MultisigReview } from "@/components/multisig-review";
@@ -50,8 +50,6 @@ function renderTxPhase(phase: TxPhase): string | null {
       return "Transaction expired without confirmation.";
   }
 }
-
-const DAILY_PASS_PRICE_RAW = parseUsdc(process.env.NEXT_PUBLIC_DAILY_PASS_PRICE_USDC || "0.5");
 
 interface Tier {
   name: string;

@@ -12,6 +12,7 @@ import { DebugMount } from "@/components/debug/debug-mount";
 import { RpcDegradedBanner } from "@/components/debug/RpcPanel";
 import { NetworkConsistencyBanner } from "@/components/layout/NetworkConsistencyBanner";
 import { CopyTradeReconciler } from "@/components/copy-trade/CopyTradeReconciler";
+import { ViewedAddressProvider } from "@/lib/hooks/useViewedAddress";
 import { WebVitals } from "@/app/web-vitals";
 
 const geistSans = Geist({
@@ -66,6 +67,7 @@ export default function RootLayout({
         </a>
         <PwaRegistrar>
           <WalletProvider>
+            <ViewedAddressProvider>
             <CopyTradeReconciler />
             <RealtimeProvider>
               <HealthProvider>

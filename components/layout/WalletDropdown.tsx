@@ -16,6 +16,7 @@ const WalletDropdownBody = () => {
   const { isWrongNetwork, walletNetwork, confirmUnknownNetwork } = useWalletNetwork();
   const { isConnecting, error } = useWalletSession();
   const { openModal, disconnect } = useWalletActions();
+  const { isWatching, viewed, clearWatch } = useViewedAddress();
   const [copied, setCopied] = useState(false);
   const balance = useUsdcBalance(address);
   const balanceState = useUsdcBalanceState(address);

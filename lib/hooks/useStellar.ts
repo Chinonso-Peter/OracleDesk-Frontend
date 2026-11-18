@@ -5,6 +5,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNetworkMutation as useMutation } from "@/lib/query/useNetworkMutation";
 import { recheckRpcAfterSimulation } from "@/lib/stellar/rpc-network-guard";
 import { isWalletCreator, settlementOf } from "@/lib/stellar/lp";
+import type { ViewedAddress } from "@/lib/stellar/identity";
+import type { ContractKey } from "@/lib/stellar/contract-check";
 import { Keypair, scValToNative, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import type { AssembledTransaction } from "@stellar/stellar-sdk/contract";
 import { useWalletAddress, useWalletNetwork, useWalletSigner } from "@/lib/contexts/WalletContext";

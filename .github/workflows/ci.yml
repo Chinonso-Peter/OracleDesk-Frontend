@@ -26,6 +26,9 @@ jobs:
       - name: Generated bindings match the contracts submodule
         run: npm run check:bindings
 
+      - name: .env.example matches the variables the code reads
+        run: npm run check:env
+
       - name: Single SDK copy and major alignment guard
         run: npm run check:sdk
 
@@ -36,6 +39,9 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
+        env:
+          # Production builds require an explicit API URL (no remote fallback).
+          NEXT_PUBLIC_API_URL: https://oracledesk-backend.onrender.com/api/v1
 
       - name: No production links to retired demo routes
         run: node scripts/check-demo-links.mjs
