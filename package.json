@@ -11,6 +11,7 @@
     "test": "vitest run",
     "sync:bindings": "node scripts/sync-bindings.mjs",
     "check:bindings": "node scripts/sync-bindings.mjs --check",
+    "check:env": "node scripts/check-env-example.mjs",
     "check:sdk": "node scripts/check-sdk-major.mjs",
     "spec:diff": "node scripts/spec-diff.mjs",
     "e2e:testnet": "vitest run --config vitest.e2e.config.mts",
@@ -18,7 +19,8 @@
     "check:x402": "node scripts/check-x402-versions.mjs",
     "bench:clients": "node scripts/bench-clients.mjs",
     "test:scripts": "node --test scripts/__tests__/",
-    "perf:lhci": "node scripts/run-lhci.mjs"
+    "perf:lhci": "node scripts/run-lhci.mjs",
+    "check:headers": "node scripts/check-headers.mjs"
   },
   "dependencies": {
     "@creit.tech/stellar-wallets-kit": "2.5.0",
@@ -55,6 +57,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
     "fake-indexeddb": "6.2.4",
+    "fast-check": "^4.10.3",
     "jsdom": "^26.1.0",
     "postcss": "^8.5.14",
     "socket.io": "4.8.3",

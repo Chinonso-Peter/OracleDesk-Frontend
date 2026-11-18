@@ -16,6 +16,11 @@ npm run dev
 
 Forgot `--recurse-submodules`? Run `git submodule update --init`.
 
+Production builds require `NEXT_PUBLIC_API_URL` (no remote fallback); it must
+end with `/api/v1`. Local `.env.local` values are validated at startup, and an
+invalid value fails the build with the full list of problems. See
+[docs/security.md](docs/security.md) for the Content-Security-Policy rollout.
+
 ## Branches and commits
 
 - Branch names: `feat/…`, `fix/…`, `docs/…`, `chore/…`, `test/…`.
@@ -28,6 +33,7 @@ Forgot `--recurse-submodules`? Run `git submodule update --init`.
 
 ```bash
 npm run check:bindings   # generated contract code matches the submodule
+npm run check:env        # .env.example documents every NEXT_PUBLIC_* the code reads
 npm run typecheck
 npm run lint
 npm test

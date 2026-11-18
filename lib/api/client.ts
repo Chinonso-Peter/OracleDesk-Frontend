@@ -1,4 +1,7 @@
 import type { UserScope } from "@/lib/query/scope";
+import { API_URL } from "@/lib/stellar/config";
+
+export { API_URL };
 
 export interface ApiRequestOptions { expectScope?: UserScope; signal?: AbortSignal }
 const sessionListeners = new Set<() => void>();
@@ -57,11 +60,55 @@ export interface ApiResponse<T> {
   meta?: unknown;
 }
 
-export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "https://oracledesk-backend.onrender.com/api/v1";
+/**
+ * How the backend session is carried. `cookie` is the default: the backend
+ * sets an HttpOnly cookie and this client sends `credentials: "include"` plus
+ * a CSRF header. `bearer` keeps the legacy localStorage token and is kept for
+ * cross-site deployments where third-party cookies are unavailable.
+ */
+export type SessionMode = "cookie" | "bearer";
+const configuredSessionMode = process.env.NEXT_PUBLIC_SESSION_MODE;
+export const SESSION_MODE: SessionMode =
+  configuredSessionMode === "bearer" ? "bearer"
+    : configuredSessionMode === "cookie" ? "cookie"
+      : process.env.NODE_ENV === "test" ? "bearer"
+        : "cookie";
+
 const TOKEN_KEY = "oracledesk_token";
 const USER_ID_KEY = "oracledesk_user_id";
 const WALLET_KEY = "oracledesk_wallet";
 const SESSION_KEY = "oracledesk_session_id";
+const CSRF_COOKIE = "od_csrf";
+
+/** CSRF token for cookie mode, kept in memory and re-read from the cookie on load. */
+let csrfToken: string | null = null;
+/** Wallet the backend confirmed the cookie belongs to. Never written from UI state alone. */
+let confirmedSessionWallet: string | null = null;
+
+export function setCsrfToken(token: string | null): void {
+  csrfToken = token;
+}
+
+export function readCsrfCookie(): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie.split(/;\s*/).find((part) => part.startsWith(`${CSRF_COOKIE}=`));
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match.slice(CSRF_COOKIE.length + 1));
+  } catch {
+    return null;
+  }
+}
+
+export function getCsrfToken(): string | null {
+  return csrfToken ?? readCsrfCookie();
+}
+
+/** Records the wallet a `GET /auth/session` (or a fresh verify) confirmed. */
+export function setConfirmedSessionWallet(wallet: string | null): void {
+  confirmedSessionWallet = wallet;
+  sessionListeners.forEach((listener) => listener());
+}
 
 function getBrowserStorage() {
   try { return typeof window === "undefined" ? null : window.localStorage; } catch { return null; }
@@ -82,11 +129,13 @@ function buildUrl(path: string, params?: QueryParams) {
 }
 
 export function getStoredToken() {
+  if (SESSION_MODE === "cookie") return null;
   return getBrowserStorage()?.getItem(TOKEN_KEY) ?? null;
 }
 
 export function getStoredSessionId() {
-  if (!getStoredToken()) return null;
+  if (SESSION_MODE === "bearer" && !getStoredToken()) return null;
+  if (SESSION_MODE === "cookie" && !confirmedSessionWallet) return null;
   const storage = getBrowserStorage();
   // Upgrade sessions saved before scope ids existed without putting JWTs in keys.
   let id = storage?.getItem(SESSION_KEY) ?? null;
@@ -97,17 +146,31 @@ export function getStoredSessionId() {
   return id;
 }
 
-export function storeAuthSession(session: { token: string; userId: string; walletAddress: string }) {
+export function storeAuthSession(session: {
+  token?: string;
+  userId: string;
+  walletAddress: string;
+  csrfToken?: string;
+}) {
   const storage = getBrowserStorage();
-  storage?.setItem(TOKEN_KEY, session.token);
-  storage?.setItem(USER_ID_KEY, session.userId);
+  // The wallet address is a UI hint in cookie mode, never proof of a session.
   storage?.setItem(WALLET_KEY, session.walletAddress);
-  storage?.setItem(SESSION_KEY, crypto.randomUUID());
+  if (!storage?.getItem(SESSION_KEY)) {
+    try { storage?.setItem(SESSION_KEY, crypto.randomUUID()); } catch { /* private mode */ }
+  }
+  if (SESSION_MODE === "cookie") {
+    confirmedSessionWallet = session.walletAddress;
+    if (session.csrfToken) setCsrfToken(session.csrfToken);
+  } else {
+    storage?.setItem(TOKEN_KEY, session.token ?? "");
+    storage?.setItem(USER_ID_KEY, session.userId);
+  }
   sessionListeners.forEach((listener) => listener());
 }
 
-/** Wallet address the stored session belongs to, if any. */
+/** Wallet address the backend session belongs to, if any. */
 export function getStoredSessionWallet() {
+  if (SESSION_MODE === "cookie") return confirmedSessionWallet;
   const storage = getBrowserStorage();
   return storage?.getItem(TOKEN_KEY) ? storage.getItem(WALLET_KEY) : null;
 }
@@ -118,6 +181,8 @@ export function clearAuthSession() {
   storage?.removeItem(USER_ID_KEY);
   storage?.removeItem(WALLET_KEY);
   storage?.removeItem(SESSION_KEY);
+  confirmedSessionWallet = null;
+  csrfToken = null;
   sessionListeners.forEach((listener) => listener());
 }
 
@@ -148,10 +213,17 @@ async function request<T>(
     headers.set("Authorization", `Bearer ${token}`);
   }
 
+  const method = (init.method ?? "GET").toUpperCase();
+  if (SESSION_MODE === "cookie" && method !== "GET" && method !== "HEAD") {
+    const csrf = getCsrfToken();
+    if (csrf) headers.set("X-CSRF-Token", csrf);
+  }
+
   let response: Response;
   try {
     response = await fetch(buildUrl(path, params), {
       ...init,
+      credentials: SESSION_MODE === "cookie" ? "include" : "same-origin",
       signal: options.signal ?? init.signal,
       headers,
     });
@@ -175,7 +247,11 @@ async function request<T>(
   assertScope();
 
   if (!response.ok || envelope?.ok === false) {
-    if (token && token === getStoredToken() && requestSessionId === getStoredSessionId() && ["TOKEN_EXPIRED", "INVALID_TOKEN", "UNAUTHORIZED"].includes(apiError?.code ?? "")) {
+    const authFailure = ["TOKEN_EXPIRED", "INVALID_TOKEN", "UNAUTHORIZED"].includes(apiError?.code ?? "") ||
+      (response.status === 401 && !apiError);
+    const sessionIsCurrent = requestSessionId === getStoredSessionId();
+    const tokenIsCurrent = SESSION_MODE === "cookie" || (token && token === getStoredToken());
+    if (authFailure && sessionIsCurrent && tokenIsCurrent) {
       clearAuthSession();
       authInvalidListeners.forEach((listener) => listener());
     }

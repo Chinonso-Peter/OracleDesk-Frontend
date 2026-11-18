@@ -24,7 +24,7 @@ Backend routes using `requireAuth` or `optionalAuth` use `userKeys`, prefixed
 with `["scope", walletOrDash, sessionIdOrDash]`. Trace bodies and lists,
 allowances, payments, positions, portfolio and admin jobs follow this rule.
 Public markets and platform statistics keep `publicKeys` and survive sign-out.
-The session id is random per sign-in and stored beside the session; bearer
+The session id is random per sign-in and stored in `localStorage`; bearer
 tokens never appear in query keys.
 
 `UserScopeStore.resetUserScope` runs synchronously on wallet disconnect,
@@ -34,7 +34,30 @@ observers, and discards late results. Chain caches are also removed on account
 change, disconnect and token invalidation. Scoped API requests bind to the
 expected session before sending and after receiving, so an old response cannot
 clear or populate a new session. `TOKEN_EXPIRED`, `INVALID_TOKEN` and
-`UNAUTHORIZED` with a token clear the session and notify the provider.
+`UNAUTHORIZED` clear the session and notify the provider.
+
+### Session transport
+
+The backend sets the session as an `HttpOnly; Secure` cookie (`od_session`)
+plus a readable `od_csrf` cookie. `NEXT_PUBLIC_SESSION_MODE=cookie` (default)
+makes `lib/api/client.ts` send `credentials: "include"` and an
+`X-CSRF-Token` header on every non-GET request; no JWT is written to
+`localStorage`, `sessionStorage` or a JS-readable cookie. Only
+`oracledesk_wallet` remains, as a UI hint.
+
+`GET /auth/session` is the source of truth for which wallet the cookie belongs
+to; `WalletProvider` asks for it on mount and feeds the answer into the state
+machine (`SESSION_SYNCED`). Disconnect and wallet switches call
+`POST /auth/logout` before a new sign-in starts (`lib/api/auth.ts` serializes
+logout → sign-in, so a late logout cannot clear the new cookie).
+`POST /auth/verify` is sent with `X-Session-Mode: cookie`.
+
+One-shot migration: on first load in cookie mode, a legacy
+`oracledesk_token` is exchanged with `POST /auth/upgrade` and then deleted
+(success or 401). A network failure keeps it for the next load. Cross-site
+deployments where third-party cookies are blocked must use
+`NEXT_PUBLIC_SESSION_MODE=bearer`; a same-site API subdomain or a Next rewrite
+proxy keeps the cookie first-party.
 
 Copy-trade reads traces through `useTrace`; it never retains a trace in an
 independent component-state cache. Add new authenticated hooks through the same
@@ -218,7 +241,7 @@ Points bucket on a worker (`lib/charts/bucket.worker.ts`) into fixed widths per 
 
 ## Errors
 
-`lib/stellar/errors.ts` turns SDK, wallet and contract failures into plain sentences. Contract errors are named from the `Error(Contract, #N)` code through each binding's `Errors` table. Wallet rejection, insufficient USDC and a missing USDC trustline are matched first, because token errors raised inside `market_core.buy` carry the token contract's own codes, which overlap with market-core's.
+`lib/stellar/errors.ts` turns SDK, wallet and contract failures into plain sentences. It first recognises SDK error classes by `name` (`UserRejectedError`, `NoSignerError`, `ExpiredStateError`, `RestoreFailureError`, `ExternalServiceError`), then decodes submission result codes, then attributes contract errors from diagnostic events: the last event whose topic is `error` and whose `ScError` is `sceContract` names the contract id that failed. A SAC failure inside `market_core.buy` is therefore attributed to `CONTRACTS.usdc` and never run through market-core's error table, even when the numbers overlap. Text regexes remain as a fallback, covered by `lib/stellar/__tests__/fixtures/errors/` and fast-check fuzz tests.
 
 ## Generated code
 

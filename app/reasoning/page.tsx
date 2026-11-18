@@ -10,10 +10,9 @@ import { getTrace, type ReasoningTrace } from "@/lib/api/traces";
 import { useWallet } from "@/lib/contexts/WalletContext";
 import { X402_ENABLED, useUnlockCart } from "@/lib/hooks/useX402";
 import { UnlockCart } from "@/components/trace/unlock-cart";
-import { parseUsdc } from "@/lib/stellar/units";
+import { DAILY_PASS_PRICE_RAW } from "@/lib/stellar/config";
 
 /** Fallback daily-pass price when no trace quoted one (same rule as /premium). */
-const DAILY_PASS_PRICE_RAW = parseUsdc(process.env.NEXT_PUBLIC_DAILY_PASS_PRICE_USDC || "0.5");
 
 interface CartControl {
   inCart: boolean;

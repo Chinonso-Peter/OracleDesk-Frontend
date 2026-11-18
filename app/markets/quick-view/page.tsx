@@ -26,7 +26,6 @@ import { PushVerifiedStatus } from "@/components/push-verified-status";
 import { SourceTag } from "@/components/ui/source-tag";
 import { CreatorPanel } from "@/components/market/CreatorPanel";
 import { backendSeed } from "@/lib/stellar/lp";
-import { ledgerClock, useLedgerClock } from "@/lib/stellar/ledger-clock";
 import {
   Dialog,
   DialogClose,

@@ -227,35 +227,6 @@ function VerifyTraceContent() {
 
   return (
     <main className="relative min-h-[calc(100vh-64px)] pt-24 pb-16 px-gutter max-w-container-max-width mx-auto overflow-hidden">
-      <style jsx global>{`
-        @keyframes scanline {
-          0% { transform: translateY(-100%); opacity: 0; }
-          50% { opacity: 1; }
-          100% { transform: translateY(1000%); opacity: 0; }
-        }
-        .scan-effect {
-          position: relative;
-          overflow: hidden;
-        }
-        .scan-effect::after {
-          content: "";
-          position: absolute;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 2px;
-          background: linear-gradient(to right, transparent, #005f73, transparent);
-          animation: scanline 3s linear infinite;
-        }
-        @keyframes pulse-ring {
-          0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 108, 73, 0.4); }
-          70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(0, 108, 73, 0); }
-          100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 108, 73, 0); }
-        }
-        .success-pulse {
-          animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-        }
-      `}</style>
 
       <div aria-hidden="true" inert className="grid grid-cols-12 gap-6 opacity-40 pointer-events-none filter blur-sm transition-all duration-700">
         <div className="col-span-12 md:col-span-8 bg-surface-container-lowest border border-outline-variant p-6 rounded-xl">
