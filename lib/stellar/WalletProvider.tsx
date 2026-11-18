@@ -8,6 +8,7 @@ import { broadcastWalletDisconnect, createCrossTabSync } from "@/lib/api/cross-t
 import { safeReturnTo } from "@/lib/navigation";
 import { NETWORK_PASSPHRASE } from "./config";
 import { describeError, UserFacingError } from "./errors";
+import { addBreadcrumb, reportError } from "@/lib/observability/report";
 import type { Signer } from "./clients";
 import { loadStellarWalletsKit, type WalletKitAdapter } from "./wallet-kit-adapter";
 import { WalletInterpreter } from "./wallet-interpreter";
@@ -212,15 +213,27 @@ export function WalletProvider({ children, kitLoader = loadStellarWalletsKit, rp
         storedSessionWallet: getStoredSessionWallet,
         clearBackendSession: clearAuthSession,
         signIn: async (address, sign, isCurrent) => {
-          const session = await signInWithWallet(address, async (xdr, networkPassphrase) => {
-            const { signedTxXdr } = await sign(xdr, { networkPassphrase, address });
-            return signedTxXdr;
-          }, isCurrent);
-          return session.walletAddress;
+          try {
+            const session = await signInWithWallet(address, async (xdr, networkPassphrase) => {
+              const { signedTxXdr } = await sign(xdr, { networkPassphrase, address });
+              return signedTxXdr;
+            }, isCurrent);
+            return session.walletAddress;
+          } catch (error) {
+            reportError(error, { feature: "connect" });
+            throw error;
+          }
         },
         purgeStellarQueries: () => queryClient.removeQueries({ queryKey: ["stellar"] }),
         navigate: (to) => routerRef.current.replace(to),
-        describe: (err) => describeError(err),
+        describe: (err) => {
+          const described = describeError(err);
+          // A cancelled prompt is a choice, not a failure; everything the
+          // wallet machine shows the user is worth capturing otherwise.
+          if (described.kind === "rejected") addBreadcrumb("wallet", "prompt rejected");
+          else reportError(err, { feature: "connect" });
+          return described;
+        },
         broadcastDisconnect: broadcastWalletDisconnect,
       }),
   );

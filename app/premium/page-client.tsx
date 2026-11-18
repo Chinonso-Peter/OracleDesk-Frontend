@@ -21,6 +21,7 @@ import { LiveRegion } from "@/components/ui/live-region";
 import { useWallet } from "@/lib/contexts/WalletContext";
 import { useUsdcTransfer, useAccountReserve, usePrepareUsdcTransfer, useAccountAuth, usePrepareMultisig } from "@/lib/hooks/useStellar";
 import { CONTRACTS, IDENTITIES, PAYMENTS_RECIPIENT, NETWORK_LABEL, NETWORK_PASSPHRASE, explorerTx } from "@/lib/stellar/config";
+import { reportError } from "@/lib/observability/report";
 import { formatUsdc, parseUsdc } from "@/lib/stellar/units";
 import { TxPhase } from "@/lib/stellar/tx-lifecycle";
 import { isMultisigAccount, type MultisigSession } from "@/lib/stellar/multisig";
@@ -308,6 +309,8 @@ export default function PremiumPageClient() {
         setStatusMessage("Payment received. Activation is still pending and is listed above; you don't need to pay again.");
       }
     } catch (error) {
+      // The transfer already left the wallet when this fires; keep it (issue #123).
+      if (txHash !== null) reportError(error, { feature: "premium", extra: { txHash } });
       const message = error instanceof Error ? error.message : "Payment failed. Please try again.";
       setStatusMessage(
         txHash === null ? `${message} If funds left your wallet, check its history before paying again.` : message,

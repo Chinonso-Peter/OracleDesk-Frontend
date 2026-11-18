@@ -7,6 +7,7 @@ import { explorerTx } from "@/lib/stellar/config";
 import { formatUsdc } from "@/lib/stellar/units";
 import { useTxTracker, type TrackedTx } from "@/lib/stellar/tx-tracker";
 import { unlockDailyPass } from "@/lib/api/traces";
+import { reportError } from "@/lib/observability/report";
 
 export function TxToastContainer() {
   const { list, dismiss } = useTxTracker();
@@ -39,6 +40,8 @@ export function TxToastContainer() {
       await unlockDailyPass(tx.followUp.traceId, tx.hash, tx.followUp.amountRaw);
       setUnlockSuccess((prev) => ({ ...prev, [tx.hash]: true }));
     } catch (err: unknown) {
+      // The pass was paid for but not activated: report the loss-in-waiting.
+      reportError(err, { feature: "premium", extra: { txHash: tx.hash } });
       setUnlockError((prev) => ({
         ...prev,
         [tx.hash]: err instanceof Error ? err.message : "Failed to activate pass",

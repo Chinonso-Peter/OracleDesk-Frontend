@@ -11,6 +11,7 @@ import { isTerminalStatus } from "@/lib/hooks/generation-status";
 import { ApiError } from "@/lib/api/client";
 import { UserFacingError } from "@/lib/stellar/errors";
 import { isAdminAddress } from "@/lib/stellar/config";
+import { reportError } from "@/lib/observability/report";
 import { DEFAULTS, serializeDiscovery } from "@/lib/markets/discovery-params";
 import { runsInLastHour, saveJob, useAdminJobs, type StoredJob } from "@/lib/admin/job-store";
 import { completedWithoutChain, elapsedFor, formatElapsed, jobFeed, shortJobId, type JobEventTone } from "@/lib/admin/job-events";
@@ -84,6 +85,7 @@ function AdminCreateContent() {
       const result = await withSession(() => generateMarket.mutateAsync({ idempotencyKey }), "start a market-maker run");
       saveJob(address, { jobId: result.jobId, lastStatus: "RUNNING", lastSeenAt: Date.now(), startedAt: new Date().toISOString() });
     } catch (err) {
+      reportError(err, { feature: "admin" });
       setStartError(describeStartError(err));
     } finally {
       starting.current = false;

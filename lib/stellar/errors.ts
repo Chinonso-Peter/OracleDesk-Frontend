@@ -377,6 +377,36 @@ export class UserFacingError extends Error {
   }
 }
 
+/**
+ * Structured reporting fields for an error (issue #123), extracted without
+ * importing anything from lib/observability so this module stays pure.
+ * ApiError is matched by its `name` rather than by instanceof to avoid a
+ * dependency on the API client.
+ */
+export interface ReportFields {
+  kind?: string;
+  code?: string;
+  contract?: ContractName;
+  apiCode?: string;
+  httpStatus?: number;
+}
+
+export function toReportFields(err: unknown): ReportFields {
+  if (err instanceof UserFacingError) {
+    return { kind: err.described.kind, code: err.described.code };
+  }
+  if (err && typeof err === "object") {
+    const candidate = err as { name?: string; code?: unknown; status?: unknown };
+    if (candidate.name === "ApiError") {
+      return {
+        apiCode: typeof candidate.code === "string" ? candidate.code : undefined,
+        httpStatus: typeof candidate.status === "number" ? candidate.status : undefined,
+      };
+    }
+  }
+  return {};
+}
+
 export function classifySequenceError(error: unknown): boolean {
   if (/tx_bad_seq|txBadSeq|bad sequence/i.test(textOf(error))) return true;
   if (!error || typeof error !== "object") return false;

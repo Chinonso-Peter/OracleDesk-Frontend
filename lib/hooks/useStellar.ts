@@ -32,6 +32,7 @@ import {
 import { useTxTracker } from "@/lib/stellar/tx-tracker";
 import { tradeInvalidationKeys } from "@/lib/stellar/tx-tracker-core";
 import { CONTRACTS, NETWORK_LABEL, NETWORK_PASSPHRASE } from "@/lib/stellar/config";
+import { addBreadcrumb, reportError } from "@/lib/observability/report";
 
 import { preflightBuy, preflightRedeem, type Preflight, type PreflightFailure, type PreflightInput } from "@/lib/stellar/preflight";
 import { getSubmitQueue } from "@/lib/stellar/submit-queue";
@@ -1052,9 +1053,15 @@ export function useBuy() {
   const tracker = useTxTracker();
 
   const mutation = useMutation({
-    onMutate: async (v: BuyParams & { prepared?: PreparedBuy }) => cancelTradeReads(queryClient, String(v.marketId), guard().publicKey),
+    onMutate: async (v: BuyParams & { prepared?: PreparedBuy }) => {
+      addBreadcrumb("mutation", "buy started");
+      return cancelTradeReads(queryClient, String(v.marketId), guard().publicKey);
+    },
     onError: (error, v, context) => {
       const kind = describeError(error).kind;
+      // A cancelled signature is a user choice, not an error: breadcrumb only.
+      if (kind === "rejected") addBreadcrumb("wallet", "buy signature rejected");
+      else reportError(error, { feature: "buy", contract: "marketCore" });
       if (context && ["network", "unknown", "expired", "submission"].includes(kind)) invalidate(String(v.marketId), context.holder);
     },
     mutationFn: async (params: BuyParams & { prepared?: PreparedBuy }) => {
@@ -1081,6 +1088,7 @@ export function useBuy() {
     },
     onSuccess: async (d, v) => {
       // Cancel again: a focus/refetch may have started while the wallet was signing.
+      addBreadcrumb("mutation", "buy confirmed");
       await cancelTradeReads(queryClient, String(v.marketId), d.holder);
       confirmTrade(queryClient, { ...v, ...d, kind: "buy", marketId: String(v.marketId) });
       for (const key of [stellarKeys.market(String(v.marketId)), ["stellar", "markets"], stellarKeys.account(d.holder)]) {
@@ -1112,9 +1120,14 @@ export function useSell() {
   const tracker = useTxTracker();
 
   const mutation = useMutation({
-    onMutate: async (v: SellParams) => cancelTradeReads(queryClient, String(v.marketId), guard().publicKey),
+    onMutate: async (v: SellParams) => {
+      addBreadcrumb("mutation", "sell started");
+      return cancelTradeReads(queryClient, String(v.marketId), guard().publicKey);
+    },
     onError: (error, v, context) => {
       const kind = describeError(error).kind;
+      if (kind === "rejected") addBreadcrumb("wallet", "sell signature rejected");
+      else reportError(error, { feature: "sell", contract: "marketCore" });
       if (context && ["network", "unknown", "expired", "submission"].includes(kind)) invalidate(String(v.marketId), context.holder);
     },
     mutationFn: async (params: SellParams) => {
@@ -1277,6 +1290,8 @@ export function useRedeem() {
     onMutate: async (v: { marketId: bigint | string }) => cancelTradeReads(queryClient, String(v.marketId), guard().publicKey),
     onError: (error, v, context) => {
       const kind = describeError(error).kind;
+      if (kind === "rejected") addBreadcrumb("wallet", "redeem signature rejected");
+      else reportError(error, { feature: "redeem", contract: "marketCore" });
       if (context && ["network", "unknown", "expired", "submission"].includes(kind)) invalidate(String(v.marketId), context.holder);
     },
     mutationFn: async ({ marketId, review }: { marketId: bigint | string; review?: PreparedWriteReview }) => {
@@ -1596,6 +1611,11 @@ export function useUsdcTransfer() {
     }),
     onSuccess: (d) => {
       queryClient.invalidateQueries({ queryKey: stellarKeys.balance(d.holder) });
+    },
+    onError: (error) => {
+      const kind = describeError(error).kind;
+      if (kind === "rejected") addBreadcrumb("wallet", "transfer signature rejected");
+      else reportError(error, { feature: "premium" });
     },
   });
 

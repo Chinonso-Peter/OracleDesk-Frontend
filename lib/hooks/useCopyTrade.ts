@@ -4,6 +4,7 @@ import { useEffect, useSyncExternalStore } from "react";
 import { useWallet } from "@/lib/contexts/WalletContext";
 import { useUserScope, useUserScopeStore, ScopeChangedError } from "@/lib/query/scope";
 import { initiateCopyTrade, confirmCopyTrade } from "@/lib/api/trade";
+import { reportError } from "@/lib/observability/report";
 import { CONTRACTS } from "@/lib/stellar/config";
 import { checkTransaction } from "@/lib/stellar/tx-lifecycle";
 import { describeError } from "@/lib/stellar/errors";
@@ -59,7 +60,15 @@ export function useCopyTradeReconciler() {
             const latest = readOutbox(address).find((e) => e.copyTradeId === entry.copyTradeId);
             if (latest && !latest.dismissed && latest.txHash === entry.txHash) updateOutbox(address, entry.copyTradeId, next);
           }
-        } catch { /* cancelled scope; the next connection owns the next attempt */ }
+        } catch (error) {
+          // Cancelled scope: the next connection owns the next attempt.
+          // Everything else (recording/confirmation failures, unreachable
+          // backend) must reach the reporter instead of vanishing (issue #123).
+          const name = (error as { name?: string } | null)?.name;
+          if (!(error instanceof ScopeChangedError) && name !== "AbortError") {
+            reportError(error, { feature: "copy-trade" });
+          }
+        }
         finally { inFlight.delete(id); }
       }
     };
@@ -113,6 +122,11 @@ export function useCopyTrade() {
       // confirms it without holding up this result or asking for another buy.
       return { ...result, recording: "pending" as const, copyTradeId: entry.copyTradeId, durable };
     } catch (error) {
+      // Keep the failure with its scope: initiation, review mismatch and
+      // signing errors all land here and previously only reached the status line.
+      if (!(error instanceof ScopeChangedError) && (error as { name?: string } | null)?.name !== "AbortError") {
+        reportError(error, { feature: "copy-trade", contract: "marketCore" });
+      }
       const saved = readOutbox(trader).find((e) => e.copyTradeId === entry.copyTradeId);
       if (!saved?.txHash) {
         updateOutbox(trader, entry.copyTradeId, { state: "abandoned", lastError: describeError(error).message });

@@ -14,6 +14,7 @@ import { NetworkConsistencyBanner } from "@/components/layout/NetworkConsistency
 import { BuildIdentityBanner } from "@/components/layout/BuildIdentityBanner";
 import { CopyTradeReconciler } from "@/components/copy-trade/CopyTradeReconciler";
 import { WebVitals } from "@/app/web-vitals";
+import { ErrorReportingInit } from "@/components/observability/ErrorReportingInit";
 
 const geistSans = Geist({
   subsets: ["latin"],
@@ -69,6 +70,7 @@ export default function RootLayout({
         <PwaRegistrar>
           <WalletProvider>
             <CopyTradeReconciler />
+            <ErrorReportingInit />
             <RealtimeProvider>
               <HealthProvider>
                 <InboxProvider>

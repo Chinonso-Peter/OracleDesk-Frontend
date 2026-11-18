@@ -57,3 +57,13 @@ When the amount matters, cross-check the address against an independent
 source such as [Stellar Expert](https://stellar.expert/explorer/testnet) or
 the deployment recorded in the contracts repository. Official builds can be
 made to fail at build time instead of warning (`ORACLEDESK_REQUIRE_CANONICAL=1`).
+
+## Data we may send, and how to say no
+
+Error reports and usage analytics are strictly opt-in and documented
+field-by-field in [docs/privacy.md](docs/privacy.md), including what is
+hashed (wallet addresses) and what is never sent (tokens, seeds, XDR,
+signatures). The short version lives at `/privacy` in the app. Nothing is
+sent without an explicit choice in Settings → Privacy (or the first-error
+prompt), and Do Not Track / Global Privacy Control are always honoured as
+"no".
