@@ -9,6 +9,8 @@ import { CONTRACTS } from "@/lib/stellar/config";
 import { checkTransaction } from "@/lib/stellar/tx-lifecycle";
 import { describeError } from "@/lib/stellar/errors";
 import { formatErrorWithReference, withOperation } from "@/lib/observability/tracing";
+import { track } from "@/lib/observability/analytics";
+import type { Outcome } from "@/lib/observability/analytics-events";
 import { useBuy, type BuyParams, type PreparedBuy } from "./useStellar";
 import {
   emptyOutbox, isTerminal, MAX_OUTBOX_ENTRIES, readOutbox, reconcileEntry, refreshOutbox,
@@ -17,6 +19,21 @@ import {
 
 export { verifyCopyBuy } from "@/lib/copy-trade/outbox";
 const inFlight = new Set<string>();
+/** Copy trade ids already reported (one `copy_trade_completed` per trade). */
+const reportedCompletions = new Set<string>();
+
+/**
+ * Issue #125: exactly one `copy_trade_completed` per copy trade id — a failure
+ * in `run()` and a later reconciler confirm must not both report. Failures
+ * before the backend issued an id have no id to dedupe on and always report.
+ */
+function reportCompletion(copyTradeId: string | null, outcome: Outcome, confirmRecorded: boolean): void {
+  if (copyTradeId !== null) {
+    if (reportedCompletions.has(copyTradeId)) return;
+    reportedCompletions.add(copyTradeId);
+  }
+  track("copy_trade_completed", { outcome, confirmRecorded });
+}
 
 export function useCopyTradeOutbox() {
   const { address } = useWallet();
@@ -52,7 +69,15 @@ export function useCopyTradeReconciler() {
           }
           const next = await reconcileEntry(resume ? { ...entry, nextAttemptAt: 0 } : entry, address, {
             now: Date.now, sessionId: scope.sessionId, check: checkTransaction,
-            confirm: (copyTradeId, hash) => confirmCopyTrade(copyTradeId, hash, { expectScope: scope, signal: ticket?.signal }),
+            confirm: async (copyTradeId, hash) => {
+              const confirmed = await confirmCopyTrade(copyTradeId, hash, { expectScope: scope, signal: ticket?.signal });
+              // Issue #125: the backend recorded it — the one completion event
+              // for this trade. Failures are reported by `run()`'s catch (first
+              // outcome wins, deduped by copyTradeId); a failed confirm is
+              // retried by this reconciler and is not a trade outcome.
+              reportCompletion(copyTradeId, "success", true);
+              return confirmed;
+            },
             assertCurrent: () => { ticket?.assertCurrent(); },
           });
           // Updating address A's outbox is safe even if B connected while the
@@ -95,6 +120,9 @@ export function useCopyTrade() {
         }
         return error;
       };
+      // Known only after the backend issues the trade; lets the failure report
+      // below dedupe against a later reconciler confirm (issue #125).
+      let copyTradeId: string | null = null;
       try {
         const trader = wallet.address;
         if (!trader || !(await wallet.ensureSession())) throw new Error("Sign in with your wallet to copy trades.");
@@ -113,6 +141,7 @@ export function useCopyTrade() {
           onChainMarketId: payload.onChainMarketId, outcome: payload.outcome, collateralInRaw: payload.collateralInRaw,
           state: "initiated", txHash: null, attempts: 0, nextAttemptAt: 0, createdAt: Date.now(),
         };
+        copyTradeId = entry.copyTradeId;
         const durable = writeOutbox(trader, [...readOutbox(trader), entry]);
         // Never sign a changed backend payload without another explicit review.
         if (payload.userWallet !== trader || payload.contractId !== CONTRACTS.marketCore ||
@@ -147,6 +176,13 @@ export function useCopyTrade() {
           throw error;
         }
       } catch (error) {
+        // Issue #125: one completion event per copy trade attempt — a failure
+        // ends it here; a success is reported when the backend confirms the
+        // recording (the reconciler's `confirm` above). A cancelled scope or
+        // an aborted request is not a trade outcome.
+        if (!(error instanceof ScopeChangedError) && (error as { name?: string } | null)?.name !== "AbortError") {
+          reportCompletion(copyTradeId, describeError(error).kind, false);
+        }
         throw withReference(error);
       }
     });

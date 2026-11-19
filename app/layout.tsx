@@ -15,6 +15,7 @@ import { BuildIdentityBanner } from "@/components/layout/BuildIdentityBanner";
 import { CopyTradeReconciler } from "@/components/copy-trade/CopyTradeReconciler";
 import { WebVitals } from "@/app/web-vitals";
 import { ErrorReportingInit } from "@/components/observability/ErrorReportingInit";
+import { ConsentBanner } from "@/components/consent-banner";
 
 const geistSans = Geist({
   subsets: ["latin"],
@@ -71,6 +72,7 @@ export default function RootLayout({
           <WalletProvider>
             <CopyTradeReconciler />
             <ErrorReportingInit />
+            <ConsentBanner />
             <RealtimeProvider>
               <HealthProvider>
                 <InboxProvider>

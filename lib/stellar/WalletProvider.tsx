@@ -9,6 +9,7 @@ import { safeReturnTo } from "@/lib/navigation";
 import { NETWORK_PASSPHRASE } from "./config";
 import { describeError, UserFacingError } from "./errors";
 import { addBreadcrumb, reportError } from "@/lib/observability/report";
+import { normalizeWalletModule, track } from "@/lib/observability/analytics";
 import type { Signer } from "./clients";
 import { loadStellarWalletsKit, type WalletKitAdapter } from "./wallet-kit-adapter";
 import { WalletInterpreter } from "./wallet-interpreter";
@@ -110,6 +111,30 @@ const ActionsContext = createContext<WalletActionsValue | null>(null);
 const MetaContext = createContext<WalletMetaValue | null>(null);
 
 const OUTSIDE_PROVIDER = "must be used inside <WalletProvider>";
+
+/* ------------------------------------------------------------------ *
+ * Funnel analytics (issue #125). Emitted from state transitions, not
+ * button clicks, and never with an address: only the wallet module id
+ * (normalised to a fixed list) and a fresh/restore flag.
+ * ------------------------------------------------------------------ */
+
+/** Set when the user explicitly opened the kit; consumed by the next connect. */
+let connectInitiated = false;
+/** Addresses already reported as connected in this tab (silent restores). */
+const reportedConnects = new Set<string>();
+/** Mirrors the connected address for closures created before the render. */
+let currentAddress: string | null = null;
+
+function emitConnected(address: string, walletModule: string | null): void {
+  const fresh = connectInitiated;
+  connectInitiated = false;
+  if (!fresh && reportedConnects.has(address)) return; // one restore event per address per tab
+  reportedConnects.add(address);
+  track("wallet_connected", { walletModule: normalizeWalletModule(walletModule), fresh });
+}
+
+/** `state` changes are coarse (match/mismatch/unknown) and never carry an address. */
+let lastNetworkStatus: "match" | "mismatch" | "unknown" | null = null;
 
 /** The connected account. Changes only when the account changes. */
 export function useWalletAddress(): WalletIdentityValue {
@@ -213,14 +238,17 @@ export function WalletProvider({ children, kitLoader = loadStellarWalletsKit, rp
         storedSessionWallet: getStoredSessionWallet,
         clearBackendSession: clearAuthSession,
         signIn: async (address, sign, isCurrent) => {
+          track("signin_started", {});
           try {
             const session = await signInWithWallet(address, async (xdr, networkPassphrase) => {
               const { signedTxXdr } = await sign(xdr, { networkPassphrase, address });
               return signedTxXdr;
             }, isCurrent);
+            track("signin_completed", { outcome: "success" });
             return session.walletAddress;
           } catch (error) {
             reportError(error, { feature: "connect" });
+            track("signin_completed", { outcome: describeError(error).kind });
             throw error;
           }
         },
@@ -232,6 +260,10 @@ export function WalletProvider({ children, kitLoader = loadStellarWalletsKit, rp
           // wallet machine shows the user is worth capturing otherwise.
           if (described.kind === "rejected") addBreadcrumb("wallet", "prompt rejected");
           else reportError(err, { feature: "connect" });
+          // Only failures before a wallet is connected belong to the connect funnel.
+          if (!currentAddress) {
+            track("wallet_connect_failed", { kind: described.kind });
+          }
           return described;
         },
         broadcastDisconnect: broadcastWalletDisconnect,
@@ -296,15 +328,34 @@ export function WalletProvider({ children, kitLoader = loadStellarWalletsKit, rp
 
   const [selectedWalletId, setSelectedWalletId] = useState<string | null>(null);
   useEffect(() => {
+    currentAddress = address;
     if (!address) return;
     let live = true;
     kitLoader()
-      .then((kit) => live && setSelectedWalletId(kit.selectedModuleId?.() ?? null))
+      .then((kit) => {
+        if (!live) return;
+        const id = kit.selectedModuleId?.() ?? null;
+        setSelectedWalletId(id);
+        // Connect funnel: one event per connection, module id normalised.
+        emitConnected(address, id);
+      })
       .catch(() => {});
     return () => {
       live = false;
     };
   }, [address, kitLoader]);
+
+  // Wallet network consistency, once per status change while connected.
+  useEffect(() => {
+    if (!address) {
+      lastNetworkStatus = null;
+      return;
+    }
+    const status = networkSnapshot.walletNetwork.state;
+    if (status === lastNetworkStatus) return;
+    lastNetworkStatus = status;
+    track("wallet_network_checked", { status });
+  }, [address, networkSnapshot.walletNetwork.state]);
 
   // Push notifications are per-origin, not per-wallet: when the wallet
   // disconnects or switches, drop the previous wallet's subscription so its
@@ -338,7 +389,12 @@ export function WalletProvider({ children, kitLoader = loadStellarWalletsKit, rp
   // their identities can stay stable for the lifetime of the provider.
   const actions = useMemo<WalletActionsValue>(
     () => ({
-      openModal: (opts) => { networkStore.resetConfirmation(); return interpreter.openModal(safeReturnTo(opts?.returnTo)); },
+      openModal: (opts) => {
+        networkStore.resetConfirmation();
+        connectInitiated = true;
+        track("wallet_modal_opened", {});
+        return interpreter.openModal(safeReturnTo(opts?.returnTo));
+      },
       ensureSession: () => interpreter.ensureSession(),
       withSession: async (fn, why) => {
         if (!(await interpreter.ensureSession())) {

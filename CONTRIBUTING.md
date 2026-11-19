@@ -119,6 +119,27 @@ When the submodule moves:
    submodule's `agents/core/trace.ts` `buildTrace` (canonical JSON) and update
    `FIXTURE_TRACE_HASH` in `e2e/x402/harness.ts` to its sha256.
 
+## Changing analytics events
+
+Analytics events are typed, versioned and inventoried — an event change is a
+contract with the dashboards and with `docs/privacy.md`:
+
+1. Edit `AnalyticsEvents` **and** `EVENT_SPECS` in
+   `lib/observability/analytics-events.ts` together (the `satisfies` binding
+   makes a one-sided edit a type error).
+2. Bump `ANALYTICS_SCHEMA_VERSION` in the same commit.
+3. Update the expected schema in
+   `lib/observability/__tests__/analytics-schema.test.ts` (the snapshot test
+   fails until the version bump is reflected there).
+4. Add the event/property to the inventory table in
+   [docs/privacy.md](docs/privacy.md) and append a changelog entry.
+
+Never add a wallet address, transaction hash, exact amount, market/trace id
+or any free-text user input to an event — amounts go through `bucketUsdc`,
+durations through `bucketDuration`. The runtime guard drops the whole event
+if an identifier-shaped string slips through, but it is a safety net, not a
+licence.
+
 ## Working on a Drips Wave issue
 
 This repo takes part in [Drips Wave](https://docs.drips.network/wave/).

@@ -23,6 +23,8 @@ import { useUsdcTransfer, useAccountReserve, usePrepareUsdcTransfer, useAccountA
 import { CONTRACTS, IDENTITIES, PAYMENTS_RECIPIENT, NETWORK_LABEL, NETWORK_PASSPHRASE, explorerTx } from "@/lib/stellar/config";
 import { reportError } from "@/lib/observability/report";
 import { formatErrorWithReference, setSpanAttribute, withOperation } from "@/lib/observability/tracing";
+import { track } from "@/lib/observability/analytics";
+import { describeError } from "@/lib/stellar/errors";
 import { formatUsdc, parseUsdc } from "@/lib/stellar/units";
 import { TxPhase } from "@/lib/stellar/tx-lifecycle";
 import { isMultisigAccount, type MultisigSession } from "@/lib/stellar/multisig";
@@ -264,6 +266,7 @@ export default function PremiumPageClient() {
 
     await withOperation("premium-unlock", async (opCtx) => {
       setIsSubmitting(true);
+      track("premium_payment_started", {});
       let txHash: string | null = null;
       try {
         setStatusMessage("One more signature: this logs you in to OracleDesk and doesn't move funds.");
@@ -303,6 +306,10 @@ export default function PremiumPageClient() {
 
         setStatusMessage("Payment sent. Waiting for OracleDesk to verify it on-chain…");
         const result = await resumePayment(payment, ensureSession);
+        track("premium_payment_completed", {
+          outcome: result === "verified" ? "success" : "unknown",
+          stage: "unlock",
+        });
         if (!saved) {
           setStatusMessage(`Couldn't save this payment on this device. Keep this transaction: ${explorerTx(txHash)}`);
         } else if (result === "verified") {
@@ -314,6 +321,11 @@ export default function PremiumPageClient() {
       } catch (error) {
         // The transfer already left the wallet when this fires; keep it (issue #123).
         if (txHash !== null) reportError(error, { feature: "premium", extra: { txHash } });
+        // Issue #125: `transfer` = it failed before the USDC left, `unlock` = paid but not activated.
+        track("premium_payment_completed", {
+          outcome: describeError(error).kind,
+          stage: txHash === null ? "transfer" : "unlock",
+        });
         // Issue #124: the trace reference lets support grep this exact attempt.
         const withRef = formatErrorWithReference(error, opCtx.traceId);
         setStatusMessage(

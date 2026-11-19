@@ -14,6 +14,8 @@ import { DEBUG_ENABLED } from "@/lib/diagnostics/flags";
 import { recordSimulation } from "@/lib/diagnostics/events";
 import { useUpdatePending } from "@/lib/pwa/update-context";
 import { describeError, describeSubmission, UserFacingError, type ContractName } from "@/lib/stellar/errors";
+import { bucketDuration, bucketUsdc, coerceSlippage, track } from "@/lib/observability/analytics";
+import type { AnalyticsEvents, Outcome } from "@/lib/observability/analytics-events";
 import { BPS, priceYesBps } from "@/lib/stellar/generated/fpmm";
 import type { Config, Market as OnChainMarket, Position } from "@/lib/stellar/generated/market-core";
 import { fetchVerifiedTrace, type VerifiedTrace } from "@/lib/stellar/verified-trace";
@@ -511,14 +513,53 @@ export function useQuoteBuy(id: bigint | string | null | undefined, outcome: Out
   return useQuery({
     queryKey: stellarKeys.quoteBuy(String(id), outcome, collateralIn?.toString() ?? ""),
     enabled: id !== null && id !== undefined && collateralIn !== null && collateralIn > 0n,
-    queryFn: async () =>
-      read(
-        await measured("quote_buy", () =>
-          marketCore().quote_buy({ market_id: toId(id as string), outcome: Outcomes[outcome], collateral_in: collateralIn as bigint }),
-        ),
-      ),
+    queryFn: async ({ queryKey }) => {
+      // Issue #125: report the funnel on query-key changes only, never on
+      // background refetches of the same key, or the funnel inflates.
+      const key = JSON.stringify(queryKey);
+      const fresh = key !== lastQuoteKey;
+      if (fresh) {
+        lastQuoteKey = key;
+        track("quote_requested", { side: outcome, amount: bucketUsdc(collateralIn as bigint) });
+      }
+      try {
+        return read(
+          await measured("quote_buy", () =>
+            marketCore().quote_buy({ market_id: toId(id as string), outcome: Outcomes[outcome], collateral_in: collateralIn as bigint }),
+          ),
+        );
+      } catch (error) {
+        if (fresh) {
+          const described = describeError(error);
+          track("quote_failed", { kind: described.kind, code: described.code });
+        }
+        throw error;
+      }
+    },
     staleTime: 5_000,
   });
+}
+
+/** Last quote query key reported, so refetches of the same key stay silent. */
+let lastQuoteKey: string | null = null;
+
+/**
+ * Common `trade_completed` payload (issue #125): the outcome is the
+ * classified error kind (or "success"), the code is a public contract error
+ * name, and the duration is bucketed — never an exact timing or amount.
+ */
+function tradeResult(
+  action: AnalyticsEvents["trade_completed"]["action"],
+  error: unknown,
+  startedAt: number,
+): AnalyticsEvents["trade_completed"] {
+  const described = error ? describeError(error) : null;
+  return {
+    action,
+    outcome: (described ? described.kind : "success") as Outcome,
+    code: described?.code,
+    durationBucket: bucketDuration(startedAt ? Date.now() - startedAt : 0),
+  };
 }
 
 export function useExactBuyQuote(
@@ -738,8 +779,8 @@ function useTxRunner(contract: ContractName) {
   const { networkEpoch, assertNetworkCurrent } = useWalletNetwork();
   const [runner] = useState(() => new TxLifecycle<unknown>({ server: () => rpcServer(), contract }));
   const phase = useSyncExternalStore(runner.subscribe, runner.getSnapshot, runner.getSnapshot);
-  const start = useCallback(<T, R = T>(tx: AssembledTransaction<T>, parse: (v: xdr.ScVal | undefined) => R, onHash?: (hash: string) => void) => {
-    const run = runner.run(tx as AssembledTransaction<unknown>, parse, onHash, () => assertNetworkCurrent?.(networkEpoch)) as Promise<{ value: R; txHash: string; ledger: number }>;
+  const start = useCallback(<T, R = T>(tx: AssembledTransaction<T>, parse: (v: xdr.ScVal | undefined) => R, onHash?: (hash: string) => void, onPrompt?: () => void) => {
+    const run = runner.run(tx as AssembledTransaction<unknown>, parse, onHash, () => assertNetworkCurrent?.(networkEpoch), onPrompt) as Promise<{ value: R; txHash: string; ledger: number }>;
     if (!DEBUG_ENABLED) return run;
     const method = `submit:${String((tx as { options?: { method?: string } }).options?.method ?? "tx")}`;
     return run.then(
@@ -1051,10 +1092,12 @@ export function useBuy() {
   const invalidate = useInvalidateAfterTrade();
   const runner = useTxRunner("marketCore");
   const tracker = useTxTracker();
+  const submittedAt = useRef(0);
 
   const mutation = useMutation({
     onMutate: async (v: BuyParams & { prepared?: PreparedBuy }) => {
       addBreadcrumb("mutation", "buy started");
+      submittedAt.current = 0;
       return cancelTradeReads(queryClient, String(v.marketId), guard().publicKey);
     },
     onError: (error, v, context) => {
@@ -1065,6 +1108,13 @@ export function useBuy() {
       if (context && ["network", "unknown", "expired", "submission"].includes(kind)) invalidate(String(v.marketId), context.holder);
     },
     mutationFn: async (params: BuyParams & { prepared?: PreparedBuy }) => {
+      submittedAt.current = Date.now();
+      track("trade_submitted", {
+        action: "buy",
+        side: params.outcome,
+        amount: bucketUsdc(params.collateralIn),
+        slippageBps: coerceSlippage(params.slippageBps),
+      });
       const signer = guard();
       const { marketId, outcome, collateralIn } = params;
       return runQueuedWrite(signer, `Buy ${outcome} on #${marketId}`, dedupeValue("buy", marketId, outcome, collateralIn), guard, async () => {
@@ -1082,9 +1132,14 @@ export function useBuy() {
           tracker.track({ hash, kind: "buy", holder: signer.publicKey, marketId: String(marketId), outcome,
             amounts: { collateralIn: collateralIn.toString(), minSharesOut: minSharesOut.toString() }, networkPassphrase: NETWORK_PASSPHRASE });
         };
-        const { value, txHash, ledger } = await runner.start(prepared.tx, confirmedAmount, onHash);
+        const { value, txHash, ledger } = await runner.start(prepared.tx, confirmedAmount, onHash, () =>
+          track("trade_wallet_prompted", { action: "buy" }));
         return { sharesOut: value, quotedShares: quote, minSharesOut, txHash, ledger, collateralIn, holder: signer.publicKey };
       });
+    },
+    onSettled: (_data, error) => {
+      track("trade_completed", tradeResult("buy", error, submittedAt.current));
+      submittedAt.current = 0;
     },
     onSuccess: async (d, v) => {
       // Cancel again: a focus/refetch may have started while the wallet was signing.
@@ -1118,10 +1173,12 @@ export function useSell() {
   const invalidate = useInvalidateAfterTrade();
   const runner = useTxRunner("marketCore");
   const tracker = useTxTracker();
+  const submittedAt = useRef(0);
 
   const mutation = useMutation({
     onMutate: async (v: SellParams) => {
       addBreadcrumb("mutation", "sell started");
+      submittedAt.current = 0;
       return cancelTradeReads(queryClient, String(v.marketId), guard().publicKey);
     },
     onError: (error, v, context) => {
@@ -1131,6 +1188,12 @@ export function useSell() {
       if (context && ["network", "unknown", "expired", "submission"].includes(kind)) invalidate(String(v.marketId), context.holder);
     },
     mutationFn: async (params: SellParams) => {
+      submittedAt.current = Date.now();
+      track("trade_submitted", {
+        action: "sell",
+        side: params.outcome,
+        slippageBps: coerceSlippage(params.slippageBps),
+      });
       const { marketId, outcome, slippageBps } = params;
       const signer = guard();
       return runQueuedWrite(signer, `Sell ${outcome} on #${marketId}`, dedupeValue("sell", marketId, outcome, params.shares), guard, async () => {
@@ -1259,7 +1322,8 @@ export function useSell() {
         });
       };
 
-      const { value, txHash, ledger } = await runner.start(tx, confirmedAmount, onHash);
+      const { value, txHash, ledger } = await runner.start(tx, confirmedAmount, onHash, () =>
+        track("trade_wallet_prompted", { action: "sell" }));
       return { sharesSold: value, collateralOut: confirmed.collateralOut, maxSharesIn, txHash, ledger, holder: signer.publicKey };
       });
     },
@@ -1270,6 +1334,10 @@ export function useSell() {
       for (const key of [stellarKeys.market(String(v.marketId)), ["stellar", "markets"], stellarKeys.account(d.holder)]) {
         void queryClient.invalidateQueries({ queryKey: key });
       }
+    },
+    onSettled: (_data, error) => {
+      track("trade_completed", tradeResult("sell", error, submittedAt.current));
+      submittedAt.current = 0;
     },
   });
 
@@ -1285,9 +1353,13 @@ export function useRedeem() {
   const invalidate = useInvalidateAfterTrade();
   const runner = useTxRunner("marketCore");
   const tracker = useTxTracker();
+  const submittedAt = useRef(0);
 
   const mutation = useMutation({
-    onMutate: async (v: { marketId: bigint | string }) => cancelTradeReads(queryClient, String(v.marketId), guard().publicKey),
+    onMutate: async (v: { marketId: bigint | string }) => {
+      submittedAt.current = 0;
+      return cancelTradeReads(queryClient, String(v.marketId), guard().publicKey);
+    },
     onError: (error, v, context) => {
       const kind = describeError(error).kind;
       if (kind === "rejected") addBreadcrumb("wallet", "redeem signature rejected");
@@ -1295,6 +1367,8 @@ export function useRedeem() {
       if (context && ["network", "unknown", "expired", "submission"].includes(kind)) invalidate(String(v.marketId), context.holder);
     },
     mutationFn: async ({ marketId, review }: { marketId: bigint | string; review?: PreparedWriteReview }) => {
+      submittedAt.current = Date.now();
+      track("trade_submitted", { action: "redeem" });
       const signer = guard();
       return runQueuedWrite(signer, `Redeem #${marketId}`, dedupeValue("redeem", marketId), guard, async () => {
       await requireUsdcTrustline(signer.publicKey);
@@ -1314,7 +1388,8 @@ export function useRedeem() {
         });
       };
 
-      const { value, txHash, ledger } = await runner.start(tx, confirmedAmount, onHash);
+      const { value, txHash, ledger } = await runner.start(tx, confirmedAmount, onHash, () =>
+        track("trade_wallet_prompted", { action: "redeem" }));
       return { payout: value, txHash, ledger, holder: signer.publicKey };
       });
     },
@@ -1325,6 +1400,10 @@ export function useRedeem() {
       for (const key of [stellarKeys.market(String(v.marketId)), ["stellar", "markets"], stellarKeys.account(d.holder)]) {
         void queryClient.invalidateQueries({ queryKey: key });
       }
+    },
+    onSettled: (_data, error) => {
+      track("trade_completed", tradeResult("redeem", error, submittedAt.current));
+      submittedAt.current = 0;
     },
   });
 
