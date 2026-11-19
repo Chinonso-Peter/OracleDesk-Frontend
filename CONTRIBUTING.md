@@ -200,6 +200,10 @@ filed.
 - Amounts as `bigint` in 7-decimal USDC base units
   (`lib/stellar/units.ts`), never floats, for anything that reaches a
   transaction.
+- Any code that persists to `localStorage`, IndexedDB, or polls across tabs
+  must follow the cross-tab coordination rules in
+  [docs/testing.md](docs/testing.md#multi-tab-coordination-harness-libtestingmulti-tab)
+  and add a multi-tab race scenario using `lib/testing/multi-tab/`.
 
 ## Number and money formatting
 
