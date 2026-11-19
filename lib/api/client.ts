@@ -249,6 +249,31 @@ export function storeAuthSession(session: {
   sessionListeners.forEach((listener) => listener());
 }
 
+const tokenRotatedListeners = new Set<() => void>();
+/** Fires when a refreshed token replaces the current one; the session id is unchanged. */
+export function onTokenRotated(listener: () => void) {
+  tokenRotatedListeners.add(listener);
+  return () => { tokenRotatedListeners.delete(listener); };
+}
+
+/**
+ * Swap in a refreshed bearer token (issue #269) without rotating the session id,
+ * so user-scoped caches survive. Refuses if the wallet or session changed meanwhile.
+ */
+export function replaceToken(
+  next: { token: string; userId: string; walletAddress: string },
+  expectedSessionId: string,
+): boolean {
+  if (SESSION_MODE === "cookie") return false;
+  const storage = getBrowserStorage();
+  if (!storage?.getItem(TOKEN_KEY)) return false;
+  if (storage.getItem(WALLET_KEY) !== next.walletAddress) return false;
+  if (storage.getItem(SESSION_KEY) !== expectedSessionId) return false;
+  storage.setItem(TOKEN_KEY, next.token);
+  tokenRotatedListeners.forEach((listener) => listener());
+  return true;
+}
+
 /** Wallet address the backend session belongs to, if any. */
 export function getStoredSessionWallet() {
   if (SESSION_MODE === "cookie") return confirmedSessionWallet;

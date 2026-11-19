@@ -124,22 +124,22 @@ real trace service from the submodule (`x402/trace-api.ts`), fully offline: a
 stub facilitator (`e2e/x402/stub-facilitator.ts`) checks the signed payment,
 a fake gateway serves the fixtures in `e2e/x402/fixtures/traces/`, the Soroban
 RPC is answered in-process, and any connection to a non-loopback host fails.
-CI runs it as the `x402-contract` job.
+This is not in CI yet: there is no `x402-contract` job and no `e2e:x402` npm script on `develop`, so the harness has to be run by hand.
 
 ```bash
 npm ci --ignore-scripts --prefix contracts/oracledesk-stellar/x402   # the service's own dependencies
-npm run check:x402       # frontend and service resolve the same @x402/* versions
+node scripts/check-x402-versions.mjs       # frontend and service resolve the same @x402/* versions
 npx tsc -p e2e/x402      # typecheck the harness (kept out of the app's tsconfig)
-npm run e2e:x402
+# no npm script yet: run e2e/x402/x402-contract.e2e.test.ts with Vitest
 ```
 
 When the submodule moves:
 
-1. Run `npm ci --ignore-scripts --prefix contracts/oracledesk-stellar/x402`, then `npm run check:x402`. If the service now resolves
+1. Run `npm ci --ignore-scripts --prefix contracts/oracledesk-stellar/x402`, then `node scripts/check-x402-versions.mjs`. If the service now resolves
    different `@x402/*` versions, pin the frontend to exactly those
    (`npm install --save-exact @x402/core@<v> @x402/stellar@<v>`) and read
    the release notes for header, payload or settlement-flow changes.
-2. Run `npm run e2e:x402`. "contracts/x402 API changed: update
+2. Run the `e2e/x402` harness (see above). "contracts/x402 API changed: update
    e2e/x402/harness.ts and the frontend client" means `createTraceApi` or
    `MapTraceRepository` moved or changed shape: adapt `e2e/x402/harness.ts`,
    then `lib/x402/client.ts` if the wire format changed.
@@ -257,7 +257,7 @@ When the contracts repository changes:
    ```
 2. Run the interface change report:
    ```bash
-   npm run spec:diff
+   node scripts/spec-diff.mjs
    ```
    This decodes embedded contract specifications from both the base branch and the new bindings, producing a structured diff of functions, types, error codes, and events.
 
