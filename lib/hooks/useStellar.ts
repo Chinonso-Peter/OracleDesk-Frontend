@@ -31,6 +31,14 @@ import { Stamped, reconcileRead } from "@/lib/stellar/optimistic";
 import type { Preflight, PreflightFailure, PreflightInput } from "@/lib/stellar/preflight";
 import { preflightBuy, preflightRedeem } from "@/lib/stellar/preflight";
 import { assertIntentMatches, describeAssembled, type ReviewModel } from "@/lib/stellar/tx-decode";
+import { assertSigningDeadline, deadlineFor, type TransactionDeadline } from "@/lib/stellar/deadline";
+import { fetchLatestLedger } from "@/lib/stellar/ledger-clock";
+import {
+  clampOnChainDeadline,
+  deriveBuyLimitPriceBps,
+  deriveSellLimitPriceBps,
+  detectMarketCoreTradeV2,
+} from "@/lib/stellar/trade-v2";
 import { describeSubmission } from "@/lib/stellar/errors";
 import { cancelTradeReads, confirmTrade } from "@/lib/stellar/optimistic-cache";
 import { getSubmitQueue } from "@/lib/stellar/submit-queue";
@@ -810,6 +818,7 @@ export interface PreparedWrite {
   intent: Record<string, string>;
   builtAt: number;
   quote?: bigint;
+  deadline?: TransactionDeadline;
 }
 
 export type PreparedWriteReview = (
@@ -822,7 +831,7 @@ export type PreparedWriteReview = (
 export async function prepareBuy(
   signer: Signer,
   params: Omit<BuyParams, "confirmBoundsChanged">,
-  opts?: { timeoutInSeconds?: number; sourceAccount?: string },
+  opts?: { timeoutInSeconds?: number; sourceAccount?: string; closeTime?: bigint; ledgerNow?: number; useV2?: boolean },
 ): Promise<PreparedWrite> {
   const id = toId(params.marketId);
   const source = opts?.sourceAccount ?? signer.publicKey;
@@ -834,39 +843,94 @@ export async function prepareBuy(
     opts?.sourceAccount && opts.sourceAccount !== signer.publicKey
       ? { publicKey: source, signTransaction: signer.signTransaction }
       : signer;
-  const timeout = opts?.timeoutInSeconds;
-  const tx = await marketCore(buildSigner, timeout !== undefined ? { timeoutInSeconds: timeout } : undefined).buy(
+
+  const v2Enabled = opts?.useV2 ?? (await detectMarketCoreTradeV2()).supported;
+
+  if (!v2Enabled) {
+    const timeout = opts?.timeoutInSeconds;
+    const tx = await marketCore(buildSigner, timeout !== undefined ? { timeoutInSeconds: timeout } : undefined).buy(
+      {
+        trader: source,
+        market_id: id,
+        outcome: Outcomes[params.outcome],
+        collateral_in: params.collateralIn,
+        min_shares_out: minSharesOut,
+      },
+      timeout !== undefined ? { timeoutInSeconds: timeout } : undefined,
+    );
+    simulated(tx);
+    return {
+      tx,
+      kind: "buy",
+      contract: "marketCore",
+      derived: { min_shares_out: { value: minSharesOut, from: `quote ${quote.toString()} shares, ${params.slippageBps / 100}% slippage` } },
+      intent: {
+        trader: source,
+        market_id: id.toString(),
+        outcome: params.outcome,
+        collateral_in: params.collateralIn.toString(),
+        min_shares_out: minSharesOut.toString(),
+      },
+      builtAt: Date.now(),
+      quote,
+    };
+  }
+
+  // v2 path: ledger-time deadline capped by market close_time + exact bigint average-price limit
+  const ledgerNow = opts?.ledgerNow ?? (await fetchLatestLedger()).closeTime;
+  const closeTime = opts?.closeTime ?? (await fetchOnChainMarket(id)).market.close_time;
+  const txDeadline = deadlineFor("buy", ledgerNow, closeTime, opts?.timeoutInSeconds);
+  const limit = deriveBuyLimitPriceBps(params.collateralIn, minSharesOut);
+
+  const tx = await marketCore(buildSigner, { timeoutInSeconds: txDeadline.timeoutInSeconds }).buy_v2(
     {
       trader: source,
       market_id: id,
       outcome: Outcomes[params.outcome],
       collateral_in: params.collateralIn,
       min_shares_out: minSharesOut,
+      limit_price_bps: limit.limitPriceBps,
+      deadline: clampOnChainDeadline(txDeadline.maxTime),
     },
-    timeout !== undefined ? { timeoutInSeconds: timeout } : undefined,
+    { timeoutInSeconds: txDeadline.timeoutInSeconds },
   );
   simulated(tx);
+  const envelopeMaxTime = tx.built?.timeBounds?.maxTime;
+  const effectiveDeadline = clampOnChainDeadline(txDeadline.maxTime, envelopeMaxTime);
+
   return {
     tx,
     kind: "buy",
     contract: "marketCore",
-    derived: { min_shares_out: { value: minSharesOut, from: `quote ${quote.toString()} shares, ${params.slippageBps / 100}% slippage` } },
+    derived: {
+      min_shares_out: { value: minSharesOut, from: `quote ${quote.toString()} shares, ${params.slippageBps / 100}% slippage` },
+      limit_price_bps: {
+        value: BigInt(limit.limitPriceBps),
+        from: limit.clamped
+          ? `max avg price for ${params.outcome} clamped to 10000 bps (from ${limit.unclampedBps.toString()} bps)`
+          : `max avg price for ${params.outcome} from collateral_in / min_shares_out (ceil)`,
+      },
+      deadline: { value: effectiveDeadline, from: `ledger time + ${txDeadline.timeoutInSeconds}s (capped before close)` },
+    },
     intent: {
       trader: source,
       market_id: id.toString(),
       outcome: params.outcome,
       collateral_in: params.collateralIn.toString(),
       min_shares_out: minSharesOut.toString(),
+      limit_price_bps: String(limit.limitPriceBps),
+      deadline: effectiveDeadline.toString(),
     },
     builtAt: Date.now(),
     quote,
+    deadline: txDeadline,
   };
 }
 
 export async function prepareSell(
   signer: Signer,
   params: { marketId: bigint | string; outcome: OutcomeTag; collateralOut: bigint; maxSharesIn: bigint },
-  opts?: { timeoutInSeconds?: number; sourceAccount?: string },
+  opts?: { timeoutInSeconds?: number; sourceAccount?: string; closeTime?: bigint; ledgerNow?: number; useV2?: boolean },
 ): Promise<PreparedWrite> {
   const id = toId(params.marketId);
   const source = opts?.sourceAccount ?? signer.publicKey;
@@ -874,31 +938,84 @@ export async function prepareSell(
     opts?.sourceAccount && opts.sourceAccount !== signer.publicKey
       ? { publicKey: source, signTransaction: signer.signTransaction }
       : signer;
-  const timeout = opts?.timeoutInSeconds;
-  const tx = await marketCore(buildSigner, timeout !== undefined ? { timeoutInSeconds: timeout } : undefined).sell(
+
+  const v2Enabled = opts?.useV2 ?? (await detectMarketCoreTradeV2()).supported;
+
+  if (!v2Enabled) {
+    const timeout = opts?.timeoutInSeconds;
+    const tx = await marketCore(buildSigner, timeout !== undefined ? { timeoutInSeconds: timeout } : undefined).sell(
+      {
+        trader: source,
+        market_id: id,
+        outcome: Outcomes[params.outcome],
+        collateral_out: params.collateralOut,
+        max_shares_in: params.maxSharesIn,
+      },
+      timeout !== undefined ? { timeoutInSeconds: timeout } : undefined,
+    );
+    simulated(tx);
+    return {
+      tx,
+      kind: "sell",
+      contract: "marketCore",
+      derived: { max_shares_in: { value: params.maxSharesIn, from: "quote and slippage limit" } },
+      intent: {
+        trader: source,
+        market_id: id.toString(),
+        outcome: params.outcome,
+        collateral_out: params.collateralOut.toString(),
+        max_shares_in: params.maxSharesIn.toString(),
+      },
+      builtAt: Date.now(),
+    };
+  }
+
+  const ledgerNow = opts?.ledgerNow ?? (await fetchLatestLedger()).closeTime;
+  const closeTime = opts?.closeTime ?? (await fetchOnChainMarket(id)).market.close_time;
+  const txDeadline = deadlineFor("sell", ledgerNow, closeTime, opts?.timeoutInSeconds);
+  const limit = deriveSellLimitPriceBps(params.collateralOut, params.maxSharesIn);
+
+  const tx = await marketCore(buildSigner, { timeoutInSeconds: txDeadline.timeoutInSeconds }).sell_v2(
     {
       trader: source,
       market_id: id,
       outcome: Outcomes[params.outcome],
       collateral_out: params.collateralOut,
       max_shares_in: params.maxSharesIn,
+      limit_price_bps: limit.limitPriceBps,
+      deadline: clampOnChainDeadline(txDeadline.maxTime),
     },
-    timeout !== undefined ? { timeoutInSeconds: timeout } : undefined,
+    { timeoutInSeconds: txDeadline.timeoutInSeconds },
   );
   simulated(tx);
+  const envelopeMaxTime = tx.built?.timeBounds?.maxTime;
+  const effectiveDeadline = clampOnChainDeadline(txDeadline.maxTime, envelopeMaxTime);
+
   return {
     tx,
     kind: "sell",
     contract: "marketCore",
-    derived: { max_shares_in: { value: params.maxSharesIn, from: "quote and slippage limit" } },
+    derived: {
+      max_shares_in: { value: params.maxSharesIn, from: "quote and slippage limit" },
+      limit_price_bps: {
+        value: BigInt(limit.limitPriceBps),
+        from: limit.clamped
+          ? `min avg price for ${params.outcome} clamped to 10000 bps (from ${limit.unclampedBps.toString()} bps)`
+          : `min avg price for ${params.outcome} from collateral_out / max_shares_in (floor)`,
+      },
+      deadline: { value: effectiveDeadline, from: `ledger time + ${txDeadline.timeoutInSeconds}s (capped before close)` },
+    },
     intent: {
       trader: source,
       market_id: id.toString(),
       outcome: params.outcome,
       collateral_out: params.collateralOut.toString(),
       max_shares_in: params.maxSharesIn.toString(),
+      limit_price_bps: String(limit.limitPriceBps),
+      deadline: effectiveDeadline.toString(),
     },
     builtAt: Date.now(),
+    deadline: txDeadline,
   };
 }
 
@@ -1119,6 +1236,10 @@ export function useBuy() {
         // rebuild with the actual wallet and fresh bounds before asking for approval.
         const initial = await prepareBuy(signer, params);
         const { prepared } = await reviewPreparedWrite(initial, params.review, () => prepareBuy(signer, params));
+        if (prepared.deadline) {
+          const latest = await fetchLatestLedger().catch(() => null);
+          if (latest) assertSigningDeadline(prepared.deadline, latest.closeTime);
+        }
         const quote = prepared.quote!;
         const minSharesOut = BigInt(prepared.intent.min_shares_out);
         const onHash = (hash: string) => {
@@ -1203,14 +1324,23 @@ export function useSell() {
       } catch {
         throw new UserFacingError({ kind: "contract", message: "There isn't enough liquidity to sell that many shares." });
       }
-      const tx = await marketCore(signer).sell({
-        trader: signer.publicKey,
-        market_id: id,
-        outcome: Outcomes[outcome],
-        collateral_out: plan.collateralOut,
-        max_shares_in: plan.maxSharesIn,
-      });
-      const { value, txHash, ledger } = await send(tx);
+      const initial = await prepareSell(
+        signer,
+        { marketId: id, outcome, collateralOut: plan.collateralOut, maxSharesIn: plan.maxSharesIn },
+        { closeTime: market.close_time },
+      );
+      const { prepared } = await reviewPreparedWrite(initial, params.review, () =>
+        prepareSell(
+          signer,
+          { marketId: id, outcome, collateralOut: plan.collateralOut, maxSharesIn: plan.maxSharesIn },
+          { closeTime: market.close_time },
+        ),
+      );
+      if (prepared.deadline) {
+        const latest = await fetchLatestLedger().catch(() => null);
+        if (latest) assertSigningDeadline(prepared.deadline, latest.closeTime);
+      }
+      const { value, txHash, ledger } = await send(prepared.tx);
       return { sharesSold: value, collateralOut: plan.collateralOut, maxSharesIn: plan.maxSharesIn, txHash, ledger, holder: signer.publicKey };
       });
     },

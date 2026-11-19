@@ -36,6 +36,8 @@ const ARG_LABELS: Record<string, string> = {
   min_shares_out: "Minimum shares out",
   collateral_out: "Collateral out (USDC)",
   max_shares_in: "Maximum shares in",
+  limit_price_bps: "Limit price",
+  deadline: "On-chain deadline",
   from: "From",
   to: "To",
   amount: "Amount (USDC)",
@@ -101,6 +103,16 @@ function formatValue(name: string, type: string, raw: string): string {
   if (type === "Address") return `${raw} (${shortAddress(raw)})`;
   if (type === "i128") return `${formatUsdc(BigInt(raw), { minDecimals: 7, maxDecimals: 7 })} USDC`;
   if (type === "u64" && name === "market_id") return `#${raw}`;
+  if (type === "u32" && name === "limit_price_bps") {
+    const bps = Number(raw);
+    return bps === 0 ? "No limit (0 bps)" : `${(bps / 100).toFixed(2)}% (${raw} bps)`;
+  }
+  if (type === "u64" && name === "deadline") {
+    const sec = Number(raw);
+    if (Number.isFinite(sec) && sec > 0) {
+      return `${new Date(sec * 1000).toISOString()} (${raw})`;
+    }
+  }
   return raw;
 }
 

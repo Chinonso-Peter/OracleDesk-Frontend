@@ -100,6 +100,15 @@ export const EXPLORER_URL = config.explorerUrl;
 export const CONTRACTS = config.contracts;
 
 /**
+ * When set to "1" or "true", forces legacy `buy`/`sell` invocations even when
+ * the deployed market-core contract exposes `buy_v2`/`sell_v2`.
+ * Defaults to false (auto-detect on-chain capability, defaulting to legacy when absent).
+ */
+export const FORCE_LEGACY_TRADES: boolean =
+  process.env.NEXT_PUBLIC_FORCE_LEGACY_TRADES === "1" ||
+  process.env.NEXT_PUBLIC_FORCE_LEGACY_TRADES === "true";
+
+/**
  * Expected USDC asset identifier (CODE:ISSUER). Defaults to USDC:deployer on testnet.
  */
 export const USDC_ASSET = env(
