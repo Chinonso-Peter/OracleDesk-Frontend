@@ -5,7 +5,7 @@ import { messageFor } from "@/lib/errors/messages";
 
 export { API_URL };
 
-export interface ApiRequestOptions { expectScope?: UserScope; signal?: AbortSignal }
+export interface ApiRequestOptions { expectScope?: UserScope; signal?: AbortSignal; trace?: TraceCtx }
 const sessionListeners = new Set<() => void>();
 const authInvalidListeners = new Set<() => void>();
 export function onAuthSessionChanged(listener: () => void) {
@@ -286,6 +286,13 @@ async function request<T>(
   const requestSessionId = getStoredSessionId();
   const headers = new Headers(init.headers);
 
+  // Issue #124: correlate this request with the active operation (or a fresh
+  // trace) so backend logs and client reports share one reference id.
+  const trace = options.trace ?? currentTrace() ?? newTrace();
+  const requestId = trace.traceId.slice(0, 8);
+  if (!headers.has("traceparent")) headers.set("traceparent", toTraceparent(trace));
+  if (!headers.has("X-Request-Id")) headers.set("X-Request-Id", requestId);
+
   if (!headers.has("Content-Type") && init.body) {
     headers.set("Content-Type", "application/json");
   }
@@ -316,7 +323,9 @@ async function request<T>(
           code: "BACKEND_UNREACHABLE",
           message: "Could not connect to the API server.",
         },
-        0
+        0,
+        undefined,
+        requestId,
       );
     }
     throw error;
@@ -337,6 +346,9 @@ async function request<T>(
       authInvalidListeners.forEach((listener) => listener());
     }
 
+    // Prefer the backend's own id when it echoes one (issue #124).
+    const serverRequestId = response.headers.get("x-request-id") ?? undefined;
+
     throw new ApiError(
       apiError ?? {
         code: `HTTP_${response.status}`,
@@ -344,6 +356,7 @@ async function request<T>(
       },
       response.status,
       parseRetryAfter(response.headers.get("Retry-After")),
+      serverRequestId ?? requestId,
     );
   }
 

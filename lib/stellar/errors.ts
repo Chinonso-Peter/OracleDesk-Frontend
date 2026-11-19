@@ -609,10 +609,57 @@ export function describeSubmission(
 
 /** Thrown by write hooks so callers get a readable message in `error.message`. */
 export class UserFacingError extends Error {
+  /**
+   * Short trace/request reference (issue #124) shown after the message so a
+   * user can quote it and a maintainer can grep backend logs.
+   */
+  reference?: string;
+
   constructor(public readonly described: DescribedError, public readonly original?: unknown) {
     super(described.message);
     this.name = "UserFacingError";
   }
+
+  /** Returns this error with a reference appended to the message, if not already present. */
+  withReference(reference: string): this {
+    if (this.reference) return this;
+    this.reference = reference;
+    this.message = `${this.message} Reference: ${reference}`;
+    return this;
+  }
+}
+
+/**
+ * Structured reporting fields for an error (issue #123), extracted without
+ * importing anything from lib/observability so this module stays pure.
+ * ApiError is matched by its `name` rather than by instanceof to avoid a
+ * dependency on the API client.
+ */
+export interface ReportFields {
+  kind?: string;
+  code?: string;
+  contract?: ContractName;
+  apiCode?: string;
+  httpStatus?: number;
+  /** Trace/request reference (issue #124) for grepping backend logs. */
+  requestId?: string;
+}
+
+export function toReportFields(err: unknown): ReportFields {
+  if (err instanceof UserFacingError) {
+    return { kind: err.described.kind, code: err.described.code, requestId: err.reference };
+  }
+  if (err && typeof err === "object") {
+    const candidate = err as { name?: string; code?: unknown; status?: unknown; requestId?: unknown };
+    if (candidate.name === "ApiError") {
+      return {
+        apiCode: typeof candidate.code === "string" ? candidate.code : undefined,
+        httpStatus: typeof candidate.status === "number" ? candidate.status : undefined,
+        requestId: typeof candidate.requestId === "string" ? candidate.requestId : undefined,
+      };
+    }
+  }
+  return {};
 }
 
 export function classifySequenceError(error: unknown): boolean {

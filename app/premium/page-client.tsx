@@ -2,7 +2,7 @@
 import Image from "next/image";
 import { Icon } from "@/components/ui/icon";
 
-import { TxReview, TxReviewPreferenceControl, shouldSkipTxReview } from "@/components/tx-review";
+import { SigningIdentities, TxReview, TxReviewPreferenceControl, hasOverriddenIdentities, shouldSkipTxReview } from "@/components/tx-review";
 import type { ReviewModel } from "@/lib/stellar/tx-decode";
 import { useSubmitQueueState } from "@/lib/stellar/submit-queue";
 
@@ -137,6 +137,11 @@ export default function PremiumPageClient() {
   const [paymentMethod, setPaymentMethod] = useState<"usdc" | "card">("usdc");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  // Issue #122: when this build overrides a payment identity, the user must
+  // acknowledge the addresses before the pay button unlocks.
+  const paymentIdentitiesOverridden = hasOverriddenIdentities(["paymentsRecipient", "usdc"]);
+  const [identityAcked, setIdentityAcked] = useState(false);
+  const recipientIsTreasury = IDENTITIES.paymentsRecipient.address === CONTRACTS.treasury;
   const [reviewModel, setReviewModel] = useState<{ model: ReviewModel; changedFrom?: ReviewModel } | null>(null);
   const reviewResolver = useRef<((approved: boolean) => void) | null>(null);
   const accountAuth = useAccountAuth(address);
@@ -218,6 +223,7 @@ export default function PremiumPageClient() {
     if (!isConnected && !(await openModal())) return;
     setStatusMessage(null);
     setEscapeBlockedAnnouncement("");
+    setIdentityAcked(false);
     lastSelectedTierNameRef.current = tier.name;
     setSelectedTier(tier);
   };
@@ -254,24 +260,35 @@ export default function PremiumPageClient() {
       return;
     }
 
-    setIsSubmitting(true);
-    let txHash: string | null = null;
-    try {
-      setStatusMessage("One more signature: this logs you in to OracleDesk and doesn't move funds.");
-      if (!(await ensureSession())) {
-        setStatusMessage("You need to sign in with your wallet before paying.");
-        return;
-      }
+    await withOperation("premium-unlock", async (opCtx) => {
+      setIsSubmitting(true);
+      track("premium_payment_started", {});
+      let txHash: string | null = null;
+      try {
+        setStatusMessage("One more signature: this logs you in to OracleDesk and doesn't move funds.");
+        if (!(await ensureSession())) {
+          setStatusMessage("You need to sign in with your wallet before paying.");
+          return;
+        }
 
-      setStatusMessage(null);
-      const sent = await transfer.mutateAsync({
-        to: PAYMENTS_RECIPIENT,
-        amount: selectedTier.priceRaw,
-        prepared: prepareTransfer.data,
-        review: reviewPreparedTransfer,
-        followUp: {
-          type: "unlock-daily-pass",
-          traceId: DAILY_PASS_TRACE_PLACEHOLDER,
+        setStatusMessage(null);
+        const sent = await transfer.mutateAsync({
+          to: PAYMENTS_RECIPIENT,
+          amount: selectedTier.priceRaw,
+          prepared: prepareTransfer.data,
+          review: reviewPreparedTransfer,
+          followUp: {
+            type: "unlock-daily-pass",
+            traceId: DAILY_PASS_TRACE_PLACEHOLDER,
+            amountRaw: selectedTier.priceRaw.toString(),
+          },
+        });
+        txHash = sent.txHash.toLowerCase();
+        setSpanAttribute("payment.tx_hash", txHash);
+
+        const payment: PendingPayment = {
+          txHash,
+          kind: "DAILY_PASS",
           amountRaw: selectedTier.priceRaw.toString(),
         },
       });
@@ -564,10 +581,33 @@ export default function PremiumPageClient() {
                 {isUnfunded && <p className="text-warning text-sm">This account cannot cover the transaction fee.</p>}
               </div>
 
+              <SigningIdentities keys={["paymentsRecipient", "usdc"]} />
+              {recipientIsTreasury && (
+                <p className="rounded-xl border border-outline-variant bg-surface-container-low p-3 text-xs text-on-surface-variant">
+                  Payments go to the OracleDesk treasury contract, which also funds the agent&apos;s trading.
+                </p>
+              )}
+              {paymentIdentitiesOverridden && (
+                <label className="flex items-center gap-2 text-sm text-on-surface-variant">
+                  <input
+                    type="checkbox"
+                    checked={identityAcked}
+                    onChange={(event) => setIdentityAcked(event.target.checked)}
+                  />
+                  I checked these addresses
+                </label>
+              )}
+
               <div className="flex flex-col gap-3">
                 <button
                   onClick={() => void handlePayment()}
-                  disabled={isSubmitting || !selectedTier?.priceRaw || !address || isWrongNetwork}
+                  disabled={
+                    isSubmitting ||
+                    !selectedTier?.priceRaw ||
+                    !address ||
+                    isWrongNetwork ||
+                    (paymentIdentitiesOverridden && !identityAcked)
+                  }
                   className="w-full bg-primary text-primary-foreground py-3 rounded-lg font-label-caps text-label-caps hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {isSubmitting ? "Processing…" : `Pay ${selectedTier?.priceStr}`}

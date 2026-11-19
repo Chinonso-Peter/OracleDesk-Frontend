@@ -16,6 +16,8 @@ import { broadcastSessionChange } from "./cross-tab-sync";
 import { TransactionBuilder } from "@stellar/stellar-sdk";
 import { NETWORK_PASSPHRASE } from "@/lib/stellar/config";
 import { NetworkMismatchError } from "@/lib/stellar/network-check";
+import { sha256Hex } from "@/lib/stellar/trace";
+import { withOperation } from "@/lib/observability/tracing";
 
 export interface AuthSession {
   token?: string;
@@ -46,8 +48,8 @@ export interface AuthChallenge {
   expiresAt: string;
 }
 
-export async function requestChallenge(address: string) {
-  const { data } = await apiClient.post<AuthChallenge>("/auth/challenge", { address });
+export async function requestChallenge(address: string, options?: ApiRequestOptions) {
+  const { data } = await apiClient.post<AuthChallenge>("/auth/challenge", { address }, undefined, options);
   return data;
 }
 
@@ -159,12 +161,28 @@ export function validateChallenge(challenge: AuthChallenge): SEP10ValidationErro
   return validateSEP10Challenge(challenge, NETWORK_PASSPHRASE);
 }
 
+/** SHA-256 of the challenge XDR envelope (base64 decoded), sent as `X-Challenge-Hash`. */
+async function challengeHash(transaction: string): Promise<string> {
+  let bytes: Uint8Array;
+  try {
+    const binary = atob(transaction);
+    bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+  } catch {
+    bytes = new TextEncoder().encode(transaction); // not base64: hash it as-is
+  }
+  return sha256Hex(bytes);
+}
+
 /**
  * SEP-10 style login: the backend issues a challenge transaction, the wallet
  * signs it (signTransaction works in every Stellar wallet), the backend
  * verifies the signature and returns a JWT.
  *
  * Validates the challenge before signing to prevent signing malformed transactions.
+ *
+ * Runs as one traced operation (issue #124): both requests share one
+ * `traceparent`, and the verify request carries `X-Challenge-Hash` so the
+ * backend can prove the signature it verifies is over the challenge it issued.
  */
 export async function signInWithWallet(
   address: string,
@@ -175,23 +193,26 @@ export async function signInWithWallet(
   await pendingLogout.catch(() => undefined);
   const challenge = await requestChallenge(address);
 
-  if (challenge.networkPassphrase !== NETWORK_PASSPHRASE) {
-    throw new NetworkMismatchError(NETWORK_PASSPHRASE, challenge.networkPassphrase);
-  }
-  // XDR does not itself encode a passphrase; parsing here ensures the envelope
-  // is valid, and the exact advertised passphrase check above binds the hash.
-  TransactionBuilder.fromXDR(challenge.transaction, NETWORK_PASSPHRASE);
+    if (challenge.networkPassphrase !== NETWORK_PASSPHRASE) {
+      throw new NetworkMismatchError(NETWORK_PASSPHRASE, challenge.networkPassphrase);
+    }
+    // XDR does not itself encode a passphrase; parsing here ensures the envelope
+    // is valid, and the exact advertised passphrase check above binds the hash.
+    TransactionBuilder.fromXDR(challenge.transaction, NETWORK_PASSPHRASE);
 
-  // Validate challenge before signing
-  const validationError = validateChallenge(challenge);
-  if (validationError) {
-    throw new Error(`Invalid SEP-10 challenge: ${validationError.message}`);
-  }
+    // Validate challenge before signing
+    const validationError = validateChallenge(challenge);
+    if (validationError) {
+      throw new Error(`Invalid SEP-10 challenge: ${validationError.message}`);
+    }
 
-  if (!isCurrent()) throw new Error("Your account changed; sign in again.");
-  const signed = await signTransaction(challenge.transaction, challenge.networkPassphrase);
-  if (!isCurrent()) throw new Error("Your account changed; sign in again.");
-  return verifyChallenge(address, signed, isCurrent);
+    if (!isCurrent()) throw new Error("Your account changed; sign in again.");
+    const signed = await signTransaction(challenge.transaction, challenge.networkPassphrase);
+    if (!isCurrent()) throw new Error("Your account changed; sign in again.");
+    return verifyChallenge(address, signed, isCurrent, trace, {
+      "X-Challenge-Hash": await challengeHash(challenge.transaction),
+    });
+  });
 }
 
 /**
