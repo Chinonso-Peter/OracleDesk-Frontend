@@ -17,15 +17,9 @@ import { VirtualList } from "@/components/ui/virtual-list";
 import { QuestionVerificationBadge } from "@/components/question-verification-badge";
 import { bytesToHex } from "@/lib/stellar/typed-call";
 import { userMessage } from "@/lib/errors/display";
-
-const SourceTag = ({ source }: { source: "chain" | "backend" }) => (
-  <span
-    title={source === "chain" ? "Read live from the market contract" : "OracleDesk backend estimate; may lag the chain"}
-    className={`ml-1 text-[9px] font-bold uppercase px-1 rounded ${source === "chain" ? "bg-secondary-container text-on-secondary-container" : "bg-surface-container-highest text-on-surface-variant"}`}
-  >
-    {source}
-  </span>
-);
+import { SourceTag } from "@/components/ui/source-tag";
+import { useProvisionalPrice } from "@/lib/realtime/RealtimeProvider";
+import { reconcileDisplayPrice } from "@/lib/realtime/market-price-store";
 
 function chainStatusLabel(view: OnChainMarketView | undefined): string {
   if (!view) return "—";
@@ -114,8 +108,16 @@ const MarketCard = ({ href, category, onChainMarketId, reasoningTraces, expiry, 
   const chain = useOnChainMarket(onChainMarketId);
   const view = chain.data;
   const fromChain = Boolean(view);
-  const yesProb = view ? Math.round(view.yesBps / 100) : backendYesProb ?? 50;
+  const provisional = useProvisionalPrice(onChainMarketId);
+  const baseYesBps = view ? view.yesBps : (backendYesProb !== null && backendYesProb !== undefined ? Math.round(backendYesProb * 100) : 5000);
+  const reconciled = reconcileDisplayPrice(baseYesBps, view?.ledger, provisional);
+  const yesProb = Math.round(reconciled.priceYesBps / 100);
   const noProb = 100 - yesProb;
+  const isProvisional = reconciled.isProvisional;
+  const priceSource: "chain" | "backend" | "provisional" = isProvisional ? "provisional" : fromChain ? "chain" : "backend";
+  const priceLedger = isProvisional ? reconciled.ledger : view?.ledger ?? null;
+  const priceReadAt = isProvisional ? provisional?.receivedAt : fromChain ? chain.dataUpdatedAt : undefined;
+
   const liquidity = view
     ? formatUsdcDisplay(view.market.sets_minted)
     : backendLiquidity ?? "—";
@@ -125,7 +127,6 @@ const MarketCard = ({ href, category, onChainMarketId, reasoningTraces, expiry, 
   const aiStatus = latestTrace ? `${Math.abs(latestTrace.edge * 100).toFixed(1)}% EDGE` : "STABLE";
   const volume24h = chainStatusLabel(view);
 
-  const fromChain = Boolean(view?.market);
   const questionIntegrity = useMarketQuestionIntegrity({
     marketId,
     onChainMarketId,
@@ -184,7 +185,7 @@ const MarketCard = ({ href, category, onChainMarketId, reasoningTraces, expiry, 
         <div className="space-y-4">
           <div>
             <div className="flex justify-between text-label-caps font-label-caps mb-2">
-              <span className="text-secondary">YES {yesProb}%<SourceTag source={fromChain ? "chain" : "backend"} /></span>
+              <span className="text-secondary">YES {yesProb}%<SourceTag source={priceSource} ledger={priceLedger} readAt={priceReadAt} /></span>
               <span className="text-tertiary">NO {noProb}%</span>
             </div>
             <div className="w-full h-2 rounded-full bg-outline-variant overflow-hidden flex">
