@@ -419,3 +419,26 @@ To allow inspecting any Stellar address's positions, balances, and history witho
    - Copy-trade position sizing is strictly bound to the signer's actual USDC balance, never the watched address's funds.
 
 
+
+## Browser Storage Durability (#228)
+
+Every origin-scoped store is classified and registered with `lib/storage/quota.ts`.
+
+### Store classes and keys
+
+| Store | Class | Technology | Key / DB name |
+|---|---|---|---|
+| x402 payment journal | `evidence` | IndexedDB | `oracledesk-x402` / store `payments` |
+| Pending daily-pass payments | `evidence` | localStorage | `oracledesk_pending_payments_v1` |
+| Copy-trade outbox | `evidence` | localStorage | `oracledesk_copy_outbox:<wallet>` |
+| Persistence record | `preference` | localStorage | `oracledesk_storage_persist_v1` |
+| Inbox notifications | `preference` | IndexedDB | `oracledesk-inbox` |
+| Price-history series cache | `disposable` | IndexedDB | `oracledesk-history` / store `series` |
+| Service worker precache | `disposable` | Cache API | `shell-<BUILD_ID>` |
+
+### Rules
+
+- `evidence` stores are **never** evicted automatically.
+- `disposable` stores are evicted LRU under a `navigator.locks` Web Lock named `oracledesk-storage-evict`.
+- `navigator.storage.persist()` is requested after the first successful paid action, rate-limited to once per 7 days.
+- `assertDurableStorage(kind)` runs before x402 signing, daily-pass transfers, and copy-trade signing; it refuses with a user-facing error when evidence cannot be written durably.

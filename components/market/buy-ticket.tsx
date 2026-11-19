@@ -2,7 +2,9 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { MultisigReview } from "@/components/multisig-review";
+// Issue #229: lazy-load multisig review — only needed for multisig wallets
+import dynamic from "next/dynamic";
+const MultisigReview = dynamic(() => import("@/components/multisig-review").then((m) => ({ default: m.MultisigReview })), { ssr: false, loading: () => null });
 import { PendingValue } from "@/components/pending-value";
 import { SourceTag } from "@/components/ui/source-tag";
 import { TxReview, shouldSkipTxReview } from "@/components/tx-review";
