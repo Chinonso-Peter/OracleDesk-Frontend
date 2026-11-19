@@ -22,6 +22,7 @@ import { useWallet } from "@/lib/contexts/WalletContext";
 import { useUsdcTransfer, useAccountReserve, usePrepareUsdcTransfer, useAccountAuth, usePrepareMultisig } from "@/lib/hooks/useStellar";
 import { CONTRACTS, IDENTITIES, PAYMENTS_RECIPIENT, NETWORK_LABEL, NETWORK_PASSPHRASE, explorerTx } from "@/lib/stellar/config";
 import { reportError } from "@/lib/observability/report";
+import { formatErrorWithReference, setSpanAttribute, withOperation } from "@/lib/observability/tracing";
 import { formatUsdc, parseUsdc } from "@/lib/stellar/units";
 import { TxPhase } from "@/lib/stellar/tx-lifecycle";
 import { isMultisigAccount, type MultisigSession } from "@/lib/stellar/multisig";
@@ -261,63 +262,69 @@ export default function PremiumPageClient() {
       return;
     }
 
-    setIsSubmitting(true);
-    let txHash: string | null = null;
-    try {
-      setStatusMessage("One more signature: this logs you in to OracleDesk and doesn't move funds.");
-      if (!(await ensureSession())) {
-        setStatusMessage("You need to sign in with your wallet before paying.");
-        return;
-      }
+    await withOperation("premium-unlock", async (opCtx) => {
+      setIsSubmitting(true);
+      let txHash: string | null = null;
+      try {
+        setStatusMessage("One more signature: this logs you in to OracleDesk and doesn't move funds.");
+        if (!(await ensureSession())) {
+          setStatusMessage("You need to sign in with your wallet before paying.");
+          return;
+        }
 
-      setStatusMessage(null);
-      const sent = await transfer.mutateAsync({
-        to: PAYMENTS_RECIPIENT,
-        amount: selectedTier.priceRaw,
-        prepared: prepareTransfer.data,
-        review: reviewPreparedTransfer,
-        followUp: {
-          type: "unlock-daily-pass",
-          traceId: DAILY_PASS_TRACE_PLACEHOLDER,
+        setStatusMessage(null);
+        const sent = await transfer.mutateAsync({
+          to: PAYMENTS_RECIPIENT,
+          amount: selectedTier.priceRaw,
+          prepared: prepareTransfer.data,
+          review: reviewPreparedTransfer,
+          followUp: {
+            type: "unlock-daily-pass",
+            traceId: DAILY_PASS_TRACE_PLACEHOLDER,
+            amountRaw: selectedTier.priceRaw.toString(),
+          },
+        });
+        txHash = sent.txHash.toLowerCase();
+        setSpanAttribute("payment.tx_hash", txHash);
+
+        const payment: PendingPayment = {
+          txHash,
+          kind: "DAILY_PASS",
           amountRaw: selectedTier.priceRaw.toString(),
-        },
-      });
-      txHash = sent.txHash.toLowerCase();
+          from: sent.holder,
+          recipient: PAYMENTS_RECIPIENT,
+          networkPassphrase: NETWORK_PASSPHRASE,
+          createdAt: Date.now(),
+          attempts: 0,
+          state: "submitted",
+        };
+        const saved = savePending(payment);
+        refreshPending();
 
-      const payment: PendingPayment = {
-        txHash,
-        kind: "DAILY_PASS",
-        amountRaw: selectedTier.priceRaw.toString(),
-        from: sent.holder,
-        recipient: PAYMENTS_RECIPIENT,
-        networkPassphrase: NETWORK_PASSPHRASE,
-        createdAt: Date.now(),
-        attempts: 0,
-        state: "submitted",
-      };
-      const saved = savePending(payment);
-      refreshPending();
-
-      setStatusMessage("Payment sent. Waiting for OracleDesk to verify it on-chain…");
-      const result = await resumePayment(payment, ensureSession);
-      if (!saved) {
-        setStatusMessage(`Couldn't save this payment on this device. Keep this transaction: ${explorerTx(txHash)}`);
-      } else if (result === "verified") {
-        setStatusMessage(`Your daily pass is active for 24 hours. Transaction: ${explorerTx(txHash)}`);
-        setTimeout(() => setSelectedTier(null), 4000);
-      } else {
-        setStatusMessage("Payment received. Activation is still pending and is listed above; you don't need to pay again.");
+        setStatusMessage("Payment sent. Waiting for OracleDesk to verify it on-chain…");
+        const result = await resumePayment(payment, ensureSession);
+        if (!saved) {
+          setStatusMessage(`Couldn't save this payment on this device. Keep this transaction: ${explorerTx(txHash)}`);
+        } else if (result === "verified") {
+          setStatusMessage(`Your daily pass is active for 24 hours. Transaction: ${explorerTx(txHash)}`);
+          setTimeout(() => setSelectedTier(null), 4000);
+        } else {
+          setStatusMessage("Payment received. Activation is still pending and is listed above; you don't need to pay again.");
+        }
+      } catch (error) {
+        // The transfer already left the wallet when this fires; keep it (issue #123).
+        if (txHash !== null) reportError(error, { feature: "premium", extra: { txHash } });
+        // Issue #124: the trace reference lets support grep this exact attempt.
+        const withRef = formatErrorWithReference(error, opCtx.traceId);
+        setStatusMessage(
+          txHash === null
+            ? `${withRef} If funds left your wallet, check its history before paying again.`
+            : withRef,
+        );
+      } finally {
+        setIsSubmitting(false);
       }
-    } catch (error) {
-      // The transfer already left the wallet when this fires; keep it (issue #123).
-      if (txHash !== null) reportError(error, { feature: "premium", extra: { txHash } });
-      const message = error instanceof Error ? error.message : "Payment failed. Please try again.";
-      setStatusMessage(
-        txHash === null ? `${message} If funds left your wallet, check its history before paying again.` : message,
-      );
-    } finally {
-      setIsSubmitting(false);
-    }
+    });
   };
 
   return (

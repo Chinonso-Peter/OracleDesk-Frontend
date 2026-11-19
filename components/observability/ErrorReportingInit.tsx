@@ -16,6 +16,7 @@ import {
   setConsentPromptHandler,
   setReportingConsent,
 } from "@/lib/observability/report";
+import { initTracing } from "@/lib/observability/tracing";
 
 /**
  * Mounts the error-reporting runtime (issue #123): initialises reporting
@@ -30,6 +31,7 @@ export function ErrorReportingInit() {
 
   // Init + global handlers once per mount.
   useEffect(() => {
+    initTracing(); // issue #124: no-op unless NEXT_PUBLIC_OTEL_EXPORTER_URL is set
     if (isReportingConfigured()) {
       initReporting({
         dsn: process.env.NEXT_PUBLIC_ERROR_REPORTING_DSN ?? "",

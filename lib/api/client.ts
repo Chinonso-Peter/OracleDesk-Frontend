@@ -1,6 +1,7 @@
 import type { UserScope } from "@/lib/query/scope";
+import { currentTrace, newTrace, toTraceparent, type TraceCtx } from "@/lib/observability/tracing";
 
-export interface ApiRequestOptions { expectScope?: UserScope; signal?: AbortSignal }
+export interface ApiRequestOptions { expectScope?: UserScope; signal?: AbortSignal; trace?: TraceCtx }
 const sessionListeners = new Set<() => void>();
 const authInvalidListeners = new Set<() => void>();
 export function onAuthSessionChanged(listener: () => void) {
@@ -24,13 +25,16 @@ export class ApiError extends Error {
   details?: unknown;
   /** Seconds from the response's `Retry-After` header (429 / 409), when the backend sent one. */
   retryAfterSeconds?: number;
+  /** First 8 hex of the client trace id sent as `traceparent` / `X-Request-Id` (issue #124), for log correlation. */
+  requestId?: string;
 
-  constructor(error: ApiErrorPayload, status: number, retryAfterSeconds?: number) {
+  constructor(error: ApiErrorPayload, status: number, retryAfterSeconds?: number, requestId?: string) {
     super(error.message);
     this.name = "ApiError";
     this.code = error.code;
     this.status = status;
     this.details = error.details;
+    this.requestId = requestId;
     this.retryAfterSeconds = retryAfterSeconds;
   }
 }
@@ -140,6 +144,13 @@ async function request<T>(
   const requestSessionId = getStoredSessionId();
   const headers = new Headers(init.headers);
 
+  // Issue #124: correlate this request with the active operation (or a fresh
+  // trace) so backend logs and client reports share one reference id.
+  const trace = options.trace ?? currentTrace() ?? newTrace();
+  const requestId = trace.traceId.slice(0, 8);
+  if (!headers.has("traceparent")) headers.set("traceparent", toTraceparent(trace));
+  if (!headers.has("X-Request-Id")) headers.set("X-Request-Id", requestId);
+
   if (!headers.has("Content-Type") && init.body) {
     headers.set("Content-Type", "application/json");
   }
@@ -163,7 +174,9 @@ async function request<T>(
           code: "BACKEND_UNREACHABLE",
           message: `Could not connect to the API server. Please ensure the backend is running at ${API_URL}`,
         },
-        0
+        0,
+        undefined,
+        requestId,
       );
     }
     throw error;
@@ -180,6 +193,9 @@ async function request<T>(
       authInvalidListeners.forEach((listener) => listener());
     }
 
+    // Prefer the backend's own id when it echoes one (issue #124).
+    const serverRequestId = response.headers.get("x-request-id") ?? undefined;
+
     throw new ApiError(
       apiError ?? {
         code: `HTTP_${response.status}`,
@@ -187,6 +203,7 @@ async function request<T>(
       },
       response.status,
       parseRetryAfter(response.headers.get("Retry-After")),
+      serverRequestId ?? requestId,
     );
   }
 

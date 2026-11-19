@@ -8,6 +8,7 @@ import { reportError } from "@/lib/observability/report";
 import { CONTRACTS } from "@/lib/stellar/config";
 import { checkTransaction } from "@/lib/stellar/tx-lifecycle";
 import { describeError } from "@/lib/stellar/errors";
+import { formatErrorWithReference, withOperation } from "@/lib/observability/tracing";
 import { useBuy, type BuyParams, type PreparedBuy } from "./useStellar";
 import {
   emptyOutbox, isTerminal, MAX_OUTBOX_ENTRIES, readOutbox, reconcileEntry, refreshOutbox,
@@ -84,57 +85,70 @@ export function useCopyTradeReconciler() {
 
 export function useCopyTrade() {
   const wallet = useWallet(); const store = useUserScopeStore(); const buy = useBuy();
-  const run = async (input: BuyParams & { traceId: string; backendMarketId: string; prepared?: PreparedBuy }) => {
-    const trader = wallet.address;
-    if (!trader || !(await wallet.ensureSession())) throw new Error("Sign in with your wallet to copy trades.");
-    const scope = store?.getSnapshot();
-    if (scope && scope.wallet !== trader) throw new ScopeChangedError();
-    const ticket = store?.capture(scope);
-    ticket?.assertCurrent();
-    if (readOutbox(trader).filter((entry) => !isTerminal(entry) && !entry.dismissed).length >= MAX_OUTBOX_ENTRIES) {
-      throw new Error("Finish or dismiss a pending copy trade before starting another.");
-    }
-    const intent = await initiateCopyTrade({ traceId: input.traceId, marketId: input.backendMarketId, amountRaw: input.collateralIn.toString() }, { expectScope: scope, signal: ticket?.signal });
-    ticket?.assertCurrent();
-    const payload = intent.transactionPayload;
-    const entry: OutboxEntry = {
-      copyTradeId: intent.copyTradeId, traceId: input.traceId, marketId: input.backendMarketId,
-      onChainMarketId: payload.onChainMarketId, outcome: payload.outcome, collateralInRaw: payload.collateralInRaw,
-      state: "initiated", txHash: null, attempts: 0, nextAttemptAt: 0, createdAt: Date.now(),
-    };
-    const durable = writeOutbox(trader, [...readOutbox(trader), entry]);
-    // Never sign a changed backend payload without another explicit review.
-    if (payload.userWallet !== trader || payload.contractId !== CONTRACTS.marketCore ||
-        payload.onChainMarketId !== String(input.marketId) || payload.outcome !== input.outcome || payload.collateralInRaw !== input.collateralIn.toString()) {
-      updateOutbox(trader, entry.copyTradeId, { state: "abandoned", lastError: "The server's copy-trade payload changed. Review the trade again." });
-      throw new Error("The server's copy-trade payload does not match your reviewed trade.");
-    }
-    try {
-      ticket?.assertCurrent();
-      const result = await buy.mutateAsync({ ...input, onSigned: (hash) => {
-        updateOutbox(trader, entry.copyTradeId, { state: "signed", txHash: hash.toLowerCase(), nextAttemptAt: 0 });
-        input.onSigned?.(hash);
-      } });
-      updateOutbox(trader, entry.copyTradeId, { state: "signed", txHash: result.txHash, nextAttemptAt: 0,
-        lastError: result.txHash ? undefined : "No transaction hash was returned. Check your account history." });
-      ticket?.assertCurrent();
-      // Chain finality is independent of backend recording. The root worker
-      // confirms it without holding up this result or asking for another buy.
-      return { ...result, recording: "pending" as const, copyTradeId: entry.copyTradeId, durable };
-    } catch (error) {
-      // Keep the failure with its scope: initiation, review mismatch and
-      // signing errors all land here and previously only reached the status line.
-      if (!(error instanceof ScopeChangedError) && (error as { name?: string } | null)?.name !== "AbortError") {
-        reportError(error, { feature: "copy-trade", contract: "marketCore" });
+  const run = async (input: BuyParams & { traceId: string; backendMarketId: string; prepared?: PreparedBuy }) =>
+    // Issue #124: one trace across initiation, recording and signing, and a
+    // reference the user can quote when any of them fails.
+    withOperation("copy-trade", async (opCtx) => {
+      const withReference = (error: unknown): unknown => {
+        if (error instanceof Error && !(error instanceof ScopeChangedError)) {
+          error.message = formatErrorWithReference(error, opCtx.traceId);
+        }
+        return error;
+      };
+      try {
+        const trader = wallet.address;
+        if (!trader || !(await wallet.ensureSession())) throw new Error("Sign in with your wallet to copy trades.");
+        const scope = store?.getSnapshot();
+        if (scope && scope.wallet !== trader) throw new ScopeChangedError();
+        const ticket = store?.capture(scope);
+        ticket?.assertCurrent();
+        if (readOutbox(trader).filter((entry) => !isTerminal(entry) && !entry.dismissed).length >= MAX_OUTBOX_ENTRIES) {
+          throw new Error("Finish or dismiss a pending copy trade before starting another.");
+        }
+        const intent = await initiateCopyTrade({ traceId: input.traceId, marketId: input.backendMarketId, amountRaw: input.collateralIn.toString() }, { expectScope: scope, signal: ticket?.signal });
+        ticket?.assertCurrent();
+        const payload = intent.transactionPayload;
+        const entry: OutboxEntry = {
+          copyTradeId: intent.copyTradeId, traceId: input.traceId, marketId: input.backendMarketId,
+          onChainMarketId: payload.onChainMarketId, outcome: payload.outcome, collateralInRaw: payload.collateralInRaw,
+          state: "initiated", txHash: null, attempts: 0, nextAttemptAt: 0, createdAt: Date.now(),
+        };
+        const durable = writeOutbox(trader, [...readOutbox(trader), entry]);
+        // Never sign a changed backend payload without another explicit review.
+        if (payload.userWallet !== trader || payload.contractId !== CONTRACTS.marketCore ||
+            payload.onChainMarketId !== String(input.marketId) || payload.outcome !== input.outcome || payload.collateralInRaw !== input.collateralIn.toString()) {
+          updateOutbox(trader, entry.copyTradeId, { state: "abandoned", lastError: "The server's copy-trade payload changed. Review the trade again." });
+          throw new Error("The server's copy-trade payload does not match your reviewed trade.");
+        }
+        try {
+          ticket?.assertCurrent();
+          const result = await buy.mutateAsync({ ...input, onSigned: (hash) => {
+            updateOutbox(trader, entry.copyTradeId, { state: "signed", txHash: hash.toLowerCase(), nextAttemptAt: 0 });
+            input.onSigned?.(hash);
+          } });
+          updateOutbox(trader, entry.copyTradeId, { state: "signed", txHash: result.txHash, nextAttemptAt: 0,
+            lastError: result.txHash ? undefined : "No transaction hash was returned. Check your account history." });
+          ticket?.assertCurrent();
+          // Chain finality is independent of backend recording. The root worker
+          // confirms it without holding up this result or asking for another buy.
+          return { ...result, recording: "pending" as const, copyTradeId: entry.copyTradeId, durable };
+        } catch (error) {
+          // Keep the failure with its scope: initiation, review mismatch and
+          // signing errors all land here and previously only reached the status line.
+          if (!(error instanceof ScopeChangedError) && (error as { name?: string } | null)?.name !== "AbortError") {
+            reportError(error, { feature: "copy-trade", contract: "marketCore" });
+          }
+          const saved = readOutbox(trader).find((e) => e.copyTradeId === entry.copyTradeId);
+          if (!saved?.txHash) {
+            updateOutbox(trader, entry.copyTradeId, { state: "abandoned", lastError: describeError(error).message });
+          } else {
+            updateOutbox(trader, entry.copyTradeId, { state: "signed", lastError: "Submission could not be confirmed yet. Checking the saved hash automatically." });
+          }
+          throw error;
+        }
+      } catch (error) {
+        throw withReference(error);
       }
-      const saved = readOutbox(trader).find((e) => e.copyTradeId === entry.copyTradeId);
-      if (!saved?.txHash) {
-        updateOutbox(trader, entry.copyTradeId, { state: "abandoned", lastError: describeError(error).message });
-      } else {
-        updateOutbox(trader, entry.copyTradeId, { state: "signed", lastError: "Submission could not be confirmed yet. Checking the saved hash automatically." });
-      }
-      throw error;
-    }
-  };
+    });
   return { run, phase: buy.phase, isPending: buy.isPending };
 }

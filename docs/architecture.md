@@ -220,6 +220,14 @@ Points bucket on a worker (`lib/charts/bucket.worker.ts`) into fixed widths per 
 
 `lib/stellar/errors.ts` turns SDK, wallet and contract failures into plain sentences. Contract errors are named from the `Error(Contract, #N)` code through each binding's `Errors` table. Wallet rejection, insufficient USDC and a missing USDC trustline are matched first, because token errors raised inside `market_core.buy` carry the token contract's own codes, which overlap with market-core's.
 
+## Observability
+
+Three opt-in layers, all off unless configured (see `.env.example` and `docs/privacy.md`):
+
+- **Error reporting** (`NEXT_PUBLIC_ERROR_REPORTING_DSN`, issue #123): `lib/observability/report.ts` captures errors with reference ids, consent (default denied, DNT/GPC honoured), rate limiting and dedupe; `lib/observability/redact.ts` strips JWTs, seeds, XDR and addresses (salted HMAC) and drops any event where a token pattern survives the second pass. `app/error.tsx` / `app/global-error.tsx` render the recovery UI with the reference.
+- **Trace context** (issue #124): `lib/observability/tracing.ts` implements W3C `traceparent`. Every `lib/api/client.ts` request sends `traceparent` + `X-Request-Id`; multi-step flows run inside `withOperation` ("sign-in", "premium-unlock", "copy-trade", "generate-market") so all of a flow's requests share one trace id, and user-visible failures append `Reference: <first 8 hex>` (`formatErrorWithReference`). The sign-in verify request also carries `X-Challenge-Hash` (sha256 of the challenge XDR) so the backend can bind the signature to the issued challenge. `ApiError.requestId` keeps the id (backend's `x-request-id` when echoed) for reports.
+- **RPC spans** (same module, issue #124): with `NEXT_PUBLIC_OTEL_EXPORTER_URL` set, `initTracing()` patches `fetch` once to time Soroban RPC calls (method, duration, HTTP status) and exports batches over OTLP/HTTP JSON at `NEXT_PUBLIC_OTEL_SAMPLE_RATE` — dependency-free, no OpenTelemetry packages in the bundle. Span attributes are filtered for sensitive keys/values before buffering. `traceparent` is never sent to the RPC provider unless `NEXT_PUBLIC_OTEL_PROPAGATE_TO_RPC=1`. Backend-side propagation of these headers is a backend concern (out of scope for this repo).
+
 ## Generated code
 
 `lib/stellar/generated/` is copied from the pinned `contracts` submodule by `scripts/sync-bindings.mjs`, with a do-not-edit header and `// @ts-nocheck`. CI fails if it's stale. `CATEGORY_TAGS` in `clients.ts` has a compile-time exhaustiveness check against the binding's `Category` type, so a contract enum change breaks the build rather than the UI.

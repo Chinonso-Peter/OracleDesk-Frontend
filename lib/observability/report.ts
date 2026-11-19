@@ -51,6 +51,7 @@ export interface RedactedEvent {
   contract?: string;
   apiCode?: string;
   httpStatus?: number;
+  requestId?: string;
   walletModule?: string;
   message: string;
   stack?: StackFrame[];
@@ -319,6 +320,7 @@ function emit(
   if (ctx?.feature) tags.feature = ctx.feature;
   if (ctx?.walletModule) tags.wallet_module = String(ctx.walletModule);
   if (err instanceof Error) tags.error_name = err.name;
+  if (fields.requestId) tags.request_id = fields.requestId;
 
   const raw: RedactedEvent = {
     id: referenceId,
