@@ -85,7 +85,8 @@ lib/stellar/generated/  Copied from the contracts submodule. Do not edit.
 contracts/              OracleDesk-SmartContract submodule (pinned)
 scripts/                sync-bindings.mjs
 e2e/                    Opt-in testnet checks
-docs/                   API contract, architecture, porting notes, status, backlog
+docs/                   API contract, architecture, reproducible build guide, porting notes, status, backlog
+See [docs/reproducible-build.md](docs/reproducible-build.md) for deterministic static builds and verification.
 ```
 
 ## Deployed testnet contracts

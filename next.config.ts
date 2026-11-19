@@ -1,12 +1,31 @@
 import type { NextConfig } from "next";
+import { execSync } from "node:child_process";
 import { API_URL, IPFS_GATEWAY, RPC_URL, X402_URL } from "./lib/stellar/config";
 import { buildCsp } from "./lib/security/csp";
 
 /**
- * Configuration is validated by lib/stellar/config.ts at module load, so an
- * invalid NEXT_PUBLIC_* value fails `next build` here with the full list of
- * problems before any page is compiled.
+ * Deterministic build ID generation.
+ * Uses commit SHA (or NEXT_PUBLIC_BUILD_ID/BUILD_ID env) with safe local fallback.
  */
+function resolveBuildId(): string {
+  if (process.env.NEXT_PUBLIC_BUILD_ID?.trim()) {
+    return process.env.NEXT_PUBLIC_BUILD_ID.trim();
+  }
+  if (process.env.BUILD_ID?.trim()) {
+    return process.env.BUILD_ID.trim();
+  }
+  try {
+    const gitSha = execSync("git rev-parse HEAD", { encoding: "utf8" }).trim();
+    if (gitSha && /^[0-9a-f]{40}$/.test(gitSha)) {
+      return gitSha;
+    }
+  } catch {
+    // git not available or not in repo
+  }
+  return "deterministic-static-build-id";
+}
+
+const DETERMINISTIC_BUILD_ID = resolveBuildId();
 
 const isDev = process.env.NODE_ENV !== "production";
 const reportUri = process.env.NEXT_PUBLIC_CSP_REPORT_URL?.trim() || "";
@@ -41,30 +60,33 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   /**
+   * Static export mode for reproducible content-addressed static builds.
+   */
+  output: "export",
+
+  /**
+   * Enforce deterministic build id exposed to application and service worker.
+   */
+  generateBuildId: async () => DETERMINISTIC_BUILD_ID,
+
+  env: {
+    NEXT_PUBLIC_BUILD_ID: DETERMINISTIC_BUILD_ID,
+  },
+
+  /**
    * Every asset is self-hosted (issue #121). Remote images are refused by
    * default; add a reviewed host here only if it is unavoidable, and add it to
    * scripts/external-origins.allow.json with a reason.
    */
-  images: { remotePatterns: [], formats: ["image/avif", "image/webp"] },
-
-  /**
-   * The seven demo-only routes retired by issue #49. Their UI moved to
-   * components/demo/ and renders only in the noindex design gallery at
-   * /dev/gallery when NEXT_PUBLIC_ENABLE_DEMO_ROUTES is set; the old URLs go
-   * to real destinations (see lib/demo/retired-routes.ts, which CI checks).
-   */
-  async redirects() {
-    return [
-      { source: "/wallet-demo", destination: "/portfolio/wallets", permanent: true },
-      { source: "/buy-yes-demo", destination: "/markets", permanent: true },
-      { source: "/buy-no-demo", destination: "/markets", permanent: true },
-      { source: "/execution-terminal", destination: "/markets", permanent: true },
-      { source: "/transaction-status", destination: "/tx", permanent: true },
-      { source: "/transaction-success", destination: "/tx", permanent: true },
-      { source: "/transaction-failed", destination: "/tx", permanent: true },
-    ];
+  images: {
+    unoptimized: true,
+    remotePatterns: [],
+    formats: ["image/avif", "image/webp"],
   },
 
+  /**
+   * Headers are defined here for custom static hosts (or local dev server).
+   */
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },
