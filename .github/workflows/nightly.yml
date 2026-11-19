@@ -1,0 +1,30 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --legacy-peer-deps
+      - uses: actions/cache@v4
+        with:
+          path: reports/mutation/stryker-incremental.json
+          key: stryker-${{ hashFiles('lib/stellar/units.ts','lib/stellar/trace.ts','lib/stellar/errors.ts','lib/stellar/__tests__/**') }}
+          restore-keys: stryker-
+      - run: npm run test:mutation
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-report
+          path: reports/mutation

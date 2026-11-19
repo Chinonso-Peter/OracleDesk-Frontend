@@ -9,63 +9,14 @@ import type { ViewedAddress } from "@/lib/stellar/identity";
 import type { ContractKey } from "@/lib/stellar/contract-check";
 import { Keypair, scValToNative, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import type { AssembledTransaction } from "@stellar/stellar-sdk/contract";
-import { useWalletAddress, useWalletNetwork, useWalletSigner } from "@/lib/contexts/WalletContext";
-import { currentRpcUrl, marketCore, reasoningRegistry, rpcPool, token, Outcomes, rpcServer, withPinnedRpc, type OutcomeTag, type Signer } from "@/lib/stellar/clients";
-import { createMarketBatcher } from "@/lib/stellar/market-batch";
-import { DEBUG_ENABLED } from "@/lib/diagnostics/flags";
-import { recordSimulation } from "@/lib/diagnostics/events";
-import { useUpdatePending } from "@/lib/pwa/update-context";
-import { describeError, describeSubmission, UserFacingError, type ContractName } from "@/lib/stellar/errors";
-import { BPS, priceYesBps } from "@/lib/stellar/generated/fpmm";
-import type { Config, Market as OnChainMarket, Position } from "@/lib/stellar/generated/market-core";
-import { fetchVerifiedTrace, type VerifiedTrace } from "@/lib/stellar/verified-trace";
-import { read, submit, bytesToHex, simulatedWithLedger, simulated } from "@/lib/stellar/typed-call";
-import { maxIn, minOut } from "@/lib/stellar/units";
-import {
-  feeBreakdown,
-  fetchBaseReserve,
-  spendableXlm,
-  type AccountReserve,
-  type FeeBreakdown,
-} from "@/lib/stellar/fees";
-import {
-  TxLifecycle,
-} from "@/lib/stellar/tx-lifecycle";
-import { useTxTracker } from "@/lib/stellar/tx-tracker";
-import { tradeInvalidationKeys } from "@/lib/stellar/tx-tracker-core";
-import { CONTRACTS, NETWORK_LABEL, NETWORK_PASSPHRASE } from "@/lib/stellar/config";
-
-import { preflightBuy, preflightRedeem, type Preflight, type PreflightFailure, type PreflightInput } from "@/lib/stellar/preflight";
-import { getSubmitQueue } from "@/lib/stellar/submit-queue";
-import { assertIntentMatches, describeAssembled, type ReviewModel } from "@/lib/stellar/tx-decode";
-import { discoverRedeemable, loadRedeemAllResume, saveRedeemAllResume, type ItemState, type RedeemAllResume, type RedeemDiscovery } from "@/lib/stellar/redeem-all";
-import { enableUsdcTrustline, getTrustlineState, usdcClassicAsset, type TrustlineState } from "@/lib/stellar/trustline";
-import { minCollateralForShares } from "@/lib/stellar/quote";
-import { reconcileWithQuote, solveSellForShares } from "@/lib/stellar/sell-solver";
-import { confirmTrade, cancelTradeReads } from "@/lib/stellar/optimistic-cache";
-import { reconcileRead, type Stamped } from "@/lib/stellar/optimistic";
-import {
-  MULTISIG_DEFAULT_SLIPPAGE_BPS,
-  MULTISIG_DEFAULT_TIMEOUT_S,
-  MULTISIG_SESSIONS_KEY,
-  isExpiredByLedger,
-  isExpiredByWallClock,
-  isMultisigAccount,
-  loadMultisigSessions,
-  mergeSigned,
-  nonInvokerAddresses,
-  readAccountAuth,
-  removeMultisigSession,
-  requiredThreshold,
-  signatureWeight,
-  upsertMultisigSession,
-  type AccountAuth,
-  type MultisigSession,
-} from "@/lib/stellar/multisig";
-
-export { tradeInvalidationKeys };
-
-export { read, submit, simulated, bytesToHex };
+import { useWallet } from "@/lib/contexts/WalletContext";
+import { marketCore, reasoningRegistry, token, Outcomes, type OutcomeTag, type Signer } from "@/lib/stellar/clients";
+import { describeError, UserFacingError, type ContractName } from "@/lib/stellar/errors";
+import { priceYesBps } from "@/lib/stellar/generated/fpmm";
+import type { Market as OnChainMarket, Position } from "@/lib/stellar/generated/market-core";
+import { fetchAndVerifyTrace, type TraceCheck } from "@/lib/stellar/trace";
+import { planSell } from "@/lib/stellar/trade-plan";
+import { minOut } from "@/lib/stellar/units";
 
 /** Query keys all start with "stellar" so a disconnect can drop them in one go. */
 export const stellarKeys = {
@@ -1125,132 +1076,31 @@ export function useSell() {
       return runQueuedWrite(signer, `Sell ${outcome} on #${marketId}`, dedupeValue("sell", marketId, outcome, params.shares), guard, async () => {
       await requireUsdcTrustline(signer.publicKey);
       const id = toId(marketId);
-      let { market } = await fetchOnChainMarketBySimulation(id);
-      const position = simulated(
-        await marketCore().get_position({ market_id: id, holder: signer.publicKey }),
-      );
-      const heldShares = outcome === "Yes" ? position.yes : position.no;
-      const shares = params.mode === "all" ? heldShares : params.shares;
-      if (shares <= 0n) {
-        throw new UserFacingError({ kind: "contract", code: "InvalidAmount", message: "Enter a share amount greater than zero." });
-      }
-      if (shares > heldShares) {
-        throw new UserFacingError({ kind: "contract", code: "InsufficientShares", message: "You don't have enough shares for this sale." });
-      }
-      const [rSold, rOther] = outcome === "Yes" ? [market.reserve_yes, market.reserve_no] : [market.reserve_no, market.reserve_yes];
-      const feeBps = BigInt(market.fee_bps);
-      let local = solveSellForShares(rSold, rOther, shares, feeBps);
-      if ("error" in local) {
-        throw new UserFacingError({
-          kind: "contract",
-          code: local.error === "too-small" ? "InvalidAmount" : "InsufficientLiquidity",
-          message: local.error === "too-small"
-            ? "That's too few shares to sell after fees."
-            : "There isn't enough liquidity to sell that many shares.",
-        });
-      }
-
-      const quoteAt = async (collateralOut: bigint) =>
-        simulated(
-          await marketCore().quote_sell({ market_id: id, outcome: Outcomes[outcome], collateral_out: collateralOut }),
-        );
-      let confirmed = await reconcileWithQuote(local, quoteAt);
-      if (confirmed.sharesIn !== local.sharesIn) {
-        market = (await fetchOnChainMarketBySimulation(id)).market;
-        const [freshSold, freshOther] =
-          outcome === "Yes" ? [market.reserve_yes, market.reserve_no] : [market.reserve_no, market.reserve_yes];
-        const refreshed = solveSellForShares(freshSold, freshOther, shares, BigInt(market.fee_bps));
-        if ("error" in refreshed) {
-          throw new UserFacingError({
-            kind: "contract",
-            code: refreshed.error === "too-small" ? "InvalidAmount" : "InsufficientLiquidity",
-            message: refreshed.error === "too-small"
-              ? "That's too few shares to sell after fees."
-              : "There isn't enough liquidity to sell that many shares.",
-          });
-        }
-        local = refreshed;
-        confirmed = await reconcileWithQuote(local, quoteAt);
-        if (confirmed.sharesIn !== local.sharesIn) {
-          const maxOut = ((freshOther - 1n) * (BPS - BigInt(market.fee_bps))) / BPS;
-          let low = 0n;
-          let high = maxOut + 1n;
-          let lowQuote = 0n;
-          let probes = 0;
-          let pivot = confirmed.collateralOut;
-          let pivotQuote = confirmed.sharesIn;
-          if (pivotQuote <= shares) {
-            low = pivot;
-            lowQuote = pivotQuote;
-          } else {
-            high = pivot;
-          }
-
-          let step = 1n;
-          while ((low === 0n || high === maxOut + 1n) && probes < 4) {
-            probes++;
-            if (low === 0n) {
-              pivot = high > maxOut ? maxOut : high;
-              const candidate = pivot > step ? pivot - step : 1n;
-              pivotQuote = await quoteAt(candidate);
-              if (pivotQuote <= shares) {
-                low = candidate;
-                lowQuote = pivotQuote;
-              } else high = candidate;
-            } else {
-              const candidate = low + step;
-              if (candidate > maxOut) break;
-              pivotQuote = await quoteAt(candidate);
-              if (pivotQuote > shares) high = candidate;
-              else {
-                low = candidate;
-                lowQuote = pivotQuote;
-              }
-            }
-            step *= 2n;
-          }
-          while (high - low > 1n && probes < 8) {
-            probes++;
-            const mid = (low + high) / 2n;
-            const midQuote = await quoteAt(mid);
-            if (midQuote <= shares) {
-              low = mid;
-              lowQuote = midQuote;
-            } else high = mid;
-          }
-          if (low === 0n || high - low > 1n) {
-            throw new UserFacingError({
-              kind: "network",
-              message: "The market changed while preparing your sale. Refresh the quote and try again.",
-            });
-          }
-          confirmed = { collateralOut: low, sharesIn: lowQuote, dust: shares - lowQuote, iterations: probes };
-        }
-      }
-
-      if (confirmed.sharesIn > shares) {
-        throw new UserFacingError({ kind: "contract", code: "InsufficientShares", message: "You don't have enough shares for this sale." });
-      }
-      const maxSharesIn = [maxIn(confirmed.sharesIn, slippageBps), heldShares].reduce((a, b) => a < b ? a : b);
-      const initial = await prepareSell(signer, { marketId, outcome, collateralOut: confirmed.collateralOut, maxSharesIn });
-      const { prepared } = await reviewPreparedWrite(initial, params.review, () => prepareSell(signer, { marketId, outcome, collateralOut: confirmed.collateralOut, maxSharesIn }));
-      const tx = prepared.tx;
-
-      const onHash = (hash: string) => {
-        tracker.track({
-          hash,
-          kind: "sell",
-          holder: signer.publicKey,
-          marketId: String(marketId),
+      const { market } = await fetchOnChainMarket(id);
+      let plan: { collateralOut: bigint; maxSharesIn: bigint };
+      try {
+        plan = planSell(
+          {
+            reserveYes: market.reserve_yes,
+            reserveNo: market.reserve_no,
+            feeBps: BigInt(market.fee_bps),
+          },
           outcome,
-          amounts: { shares: shares.toString(), maxSharesIn: maxSharesIn.toString() },
-          networkPassphrase: NETWORK_PASSPHRASE,
-        });
-      };
-
-      const { value, txHash, ledger } = await runner.start(tx, confirmedAmount, onHash);
-      return { sharesSold: value, collateralOut: confirmed.collateralOut, maxSharesIn, txHash, ledger, holder: signer.publicKey };
+          shares,
+          slippageBps
+        );
+      } catch {
+        throw new UserFacingError({ kind: "contract", message: "There isn't enough liquidity to sell that many shares." });
+      }
+      const tx = await marketCore(signer).sell({
+        trader: signer.publicKey,
+        market_id: id,
+        outcome: Outcomes[outcome],
+        collateral_out: plan.collateralOut,
+        max_shares_in: plan.maxSharesIn,
       });
+      const { value, txHash } = await send<bigint>(tx);
+      return { sharesSold: value, collateralOut: plan.collateralOut, maxSharesIn: plan.maxSharesIn, txHash, holder: signer.publicKey };
     },
     onSuccess: async (d, v) => {
       // Cancel again: a focus/refetch may have started while the wallet was signing.
