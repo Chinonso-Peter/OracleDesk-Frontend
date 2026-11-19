@@ -27,6 +27,36 @@ function resolveBuildId(): string {
 
 const DETERMINISTIC_BUILD_ID = resolveBuildId();
 
+/**
+ * Deterministic build id: single source of truth across the page,
+ * the service worker URL, and the precache manifest (.next/BUILD_ID).
+ */
+function resolveBuildId(): string {
+  const explicit = process.env.NEXT_PUBLIC_BUILD_ID?.trim();
+  if (explicit && /^[A-Za-z0-9_-]+$/.test(explicit)) return explicit;
+  const sha = (
+    process.env.NEXT_PUBLIC_BUILD_SHA ||
+    process.env.GITHUB_SHA ||
+    process.env.VERCEL_GIT_COMMIT_SHA ||
+    process.env.COMMIT_REF ||
+    process.env.HEAD ||
+    ""
+  ).trim();
+  if (sha && /^[A-Za-z0-9_-]+$/.test(sha)) return sha.slice(0, 16);
+  try {
+    const gitSha = execSync("git rev-parse --short HEAD", {
+      stdio: ["ignore", "pipe", "ignore"],
+      encoding: "utf8",
+    }).trim();
+    if (gitSha && /^[A-Za-z0-9_-]+$/.test(gitSha)) return gitSha;
+  } catch {
+    // Git unavailable; fall through
+  }
+  return "build-" + (process.env.NODE_ENV === "production" ? "prod" : "dev");
+}
+
+const deterministicBuildId = resolveBuildId();
+
 const isDev = process.env.NODE_ENV !== "production";
 const reportUri = process.env.NEXT_PUBLIC_CSP_REPORT_URL?.trim() || "";
 const enforce = process.env.NEXT_PUBLIC_CSP_ENFORCE === "1" || process.env.NEXT_PUBLIC_CSP_ENFORCE === "true";
@@ -59,6 +89,10 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  generateBuildId: async () => deterministicBuildId,
+  env: {
+    NEXT_PUBLIC_BUILD_ID: deterministicBuildId,
+  },
   /**
    * Static export mode for reproducible content-addressed static builds.
    */
