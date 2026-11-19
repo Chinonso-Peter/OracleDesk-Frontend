@@ -34,6 +34,7 @@ invalid value fails the build with the full list of problems. See
 ```bash
 npm run check:bindings   # generated contract code matches the submodule
 npm run check:env        # .env.example documents every NEXT_PUBLIC_* the code reads
+npm run check:api-errors # API error codes match docs/api.md
 npm run typecheck
 npm run lint
 npm test
@@ -220,8 +221,21 @@ When the contracts repository changes:
 
 ### Clearing CI spec-diff failures
 
-- **Uncovered Contract Errors**: If a new contract error code was added without a friendly user-facing message, add an entry describing it to `FRIENDLY` in `lib/stellar/errors.ts` (or add it to `UNFRIENDLY_ALLOWLIST` with justification if it is internal/admin-only).
+- **Uncovered Contract Errors**: If a new contract error code was added without a user-facing message, add an entry to `lib/i18n/messages/en.json` under `errors.contract.<contractName>.<ErrorName>`. Run `npm test` to verify catalog coverage.
 - **Breaking Call-Site References**: If a contract function was removed or its signature changed, update the calling code in `lib/`, `app/`, `components/`, or `e2e/` so no dead or mismatched invocations remain.
 - **Renumbered Error Codes**: Renumbering existing error codes breaks client-side error mapping and is rejected. Coordinate with contract maintainers to deprecate rather than renumber codes.
 - **Event Changes**: Changes to `Trade` or `TracePublished` events flag a requirement for backend indexer review.
+
+## Error Code Taxonomy & Adding Error Codes
+
+All errors in OracleDesk use a stable, typed taxonomy with localized messages in `lib/i18n/messages/en.json`:
+- **Contract errors**: Defined by generated bindings (`market-core`, `treasury`, `resolver`, `reasoning-registry`). To add a message for a new contract error, add `errors.contract.<contractName>.<ErrorName>` to `lib/i18n/messages/en.json`.
+- **Backend API errors**: Documented in `docs/api.md`. To add a new backend error code:
+  1. Document it in `docs/api.md` with its HTTP status (e.g., `400 INVALID_FOO`).
+  2. Add it to `API_ERROR_CODES` in `lib/errors/codes.ts`.
+  3. Add a plain-language, user-facing message to `errors.api.<CODE>` in `lib/i18n/messages/en.json`.
+  4. Run `npm run check:api-errors` and `npm test` to ensure CI checks pass.
+- **Client/Wallet errors**: Defined in `DESCRIBED_ERROR_KINDS` in `lib/errors/codes.ts` with catalog entries under `errors.kind.*`.
+- **Displaying in UI**: Always render errors via `userMessage(err)` from `lib/errors/display.ts` instead of raw `err.message`.
+
 

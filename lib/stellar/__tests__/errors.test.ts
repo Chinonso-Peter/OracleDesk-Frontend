@@ -1,21 +1,52 @@
 import { describe, expect, it } from "vitest";
 import { xdr, type rpc } from "@stellar/stellar-sdk";
 import { classifySequenceError, describeError, describeSubmission } from "../errors";
+import { NETWORK_LABEL } from "../config";
 
 describe("describeError", () => {
   it("maps market-core contract errors by code", () => {
     const slip = describeError(new Error("HostError: Error(Contract, #12)\nEvent log: ..."));
-    expect(slip).toMatchObject({ kind: "contract", code: "SlippageExceeded" });
+    expect(slip).toMatchObject({
+      kind: "contract",
+      code: "SlippageExceeded",
+      errorCode: "contract.marketCore.SlippageExceeded",
+    });
     expect(slip.message).toMatch(/price moved/i);
 
     const closed = describeError("simulation failed: Error(Contract, #9)");
-    expect(closed).toMatchObject({ kind: "contract", code: "MarketClosed" });
+    expect(closed).toMatchObject({
+      kind: "contract",
+      code: "MarketClosed",
+      errorCode: "contract.marketCore.MarketClosed",
+    });
     expect(closed.message).toMatch(/closed/i);
   });
 
   it("uses the contract's own table", () => {
-    expect(describeError("Error(Contract, #5)", "treasury").code).toBe("TradeCapExceeded");
-    expect(describeError("Error(Contract, #5)", "marketCore").code).toBe("InvalidProbability");
+    const treasuryTrade = describeError("Error(Contract, #5)", "treasury");
+    expect(treasuryTrade.code).toBe("TradeCapExceeded");
+    expect(treasuryTrade.errorCode).toBe("contract.treasury.TradeCapExceeded");
+
+    const marketProb = describeError("Error(Contract, #5)", "marketCore");
+    expect(marketProb.code).toBe("InvalidProbability");
+    expect(marketProb.errorCode).toBe("contract.marketCore.InvalidProbability");
+  });
+
+  it("resolves bare names in caller's contract first", () => {
+    const treasuryPaused = describeError("Contract failed: Paused", "treasury");
+    expect(treasuryPaused.errorCode).toBe("contract.treasury.Paused");
+    expect(treasuryPaused.message).toBe("The treasury is paused.");
+
+    const marketPaused = describeError("Contract failed: Paused", "marketCore");
+    expect(marketPaused.errorCode).toBe("contract.marketCore.Paused");
+    expect(marketPaused.message).toBe("Trading is paused right now. Try again later.");
+  });
+
+  it("wrong-network message uses NETWORK_LABEL", () => {
+    const wrongNet = describeError("wrong network detected");
+    expect(wrongNet.kind).toBe("wrong-network");
+    expect(wrongNet.errorCode).toBe("kind.wrong-network");
+    expect(wrongNet.message).toBe(`Switch your wallet to ${NETWORK_LABEL} and try again.`);
   });
 
   it("maps unknown code in known table to generic contract message with number", () => {

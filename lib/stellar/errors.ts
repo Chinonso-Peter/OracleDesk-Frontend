@@ -5,6 +5,8 @@ import { Errors as ReasoningRegistryErrors } from "./generated/reasoning-registr
 import { StrKey } from "@stellar/stellar-sdk";
 import type { rpc } from "@stellar/stellar-sdk";
 import { CONTRACTS, NETWORK_LABEL } from "./config";
+import type { ErrorCode, DescribedErrorKind, ContractCode } from "@/lib/errors/codes";
+import { messageFor } from "@/lib/errors/messages";
 
 export type ContractName = "marketCore" | "treasury" | "resolver" | "reasoningRegistry";
 export type ErrorContract = ContractName | "usdc";
@@ -16,87 +18,6 @@ const TABLES: Record<ContractName, Record<number, { message: string }>> = {
   reasoningRegistry: ReasoningRegistryErrors,
 };
 
-/**
- * Per-contract overrides for error names whose meaning differs by contract
- * (e.g. "MarketNotOpen" means "not open for trading" in market-core but
- * "no open exposure" in treasury; "NotInitialized" means something different
- * in each contract). Checked before the shared FRIENDLY map.
- */
-const CONTRACT_FRIENDLY: Partial<Record<ContractName, Record<string, string>>> = {
-  treasury: {
-    NotInitialized: "The treasury isn't set up yet.",
-    InvalidConfig: "The treasury's risk settings are invalid.",
-    MarketNotOpen: "The treasury has no open exposure in this market.",
-  },
-  resolver: {
-    NotSigner: "Your wallet isn't one of this market's signers.",
-    AlreadyAttested: "You've already attested this outcome for this market.",
-    ThresholdNotReached: "Not enough signers have attested this outcome yet.",
-    DisputeActive: "A dispute is active for this market's resolution.",
-    NoProposal: "There's no resolution proposal for this market yet.",
-    AlreadyFinalized: "This market has already been finalized.",
-    MarketNotClosed: "This market hasn't closed yet.",
-    WrongMode: "This action doesn't match this market's resolution mode.",
-    StalePrice: "The price feed is too stale to resolve this market.",
-    PriceUnavailable: "No price is available to resolve this market yet.",
-  },
-};
-
-/** Plain-language messages for contract error names, from the user's point of view. */
-export const FRIENDLY: Record<string, string> = {
-  // market-core
-  Paused: "Trading is paused right now. Try again later.",
-  InvalidAmount: "Enter an amount greater than zero.",
-  MarketNotFound: "This market doesn't exist on-chain.",
-  MarketNotOpen: "This market is no longer open for trading.",
-  MarketClosed: "This market has closed. Trading has stopped.",
-  NotClosedYet: "This market hasn't closed yet.",
-  NotFinal: "This market hasn't been resolved yet.",
-  SlippageExceeded: "The price moved before your trade went through. Try again or allow more slippage.",
-  InsufficientShares: "You don't have enough shares for this sale.",
-  InsufficientLiquidity: "There isn't enough liquidity in this market for that amount.",
-  MarketTooLarge: "This trade would take the market past its size limit.",
-  NothingToRedeem: "You have nothing to redeem in this market.",
-  AlreadyClaimed: "This has already been claimed.",
-  Overflow: "That amount is too large.",
-  // treasury
-  TradeCapExceeded: "This trade is above the treasury's per-trade limit.",
-  MarketCapExceeded: "The treasury has reached its limit for this market.",
-  DailyCapExceeded: "The treasury has reached its daily limit.",
-  InsufficientBalance: "You don't have enough USDC for this.",
-  // resolver
-  MarketAlreadyConfigured: "This market's resolution rule has already been configured.",
-  MarketNotConfigured: "This market's resolution rule hasn't been revealed yet.",
-  SpecHashMismatch: "That resolution rule doesn't match what this market committed to.",
-  DisputeWindowOpen: "The dispute window is still open.",
-  InvalidPrice: "The oracle returned an invalid price for this asset.",
-  NotSigner: "Your wallet isn't one of this market's signers.",
-  AlreadyAttested: "You've already attested this outcome for this market.",
-  ThresholdNotReached: "Not enough signers have attested this outcome yet.",
-  DisputeActive: "A dispute is active for this market's resolution.",
-  NoProposal: "There's no resolution proposal for this market yet.",
-  AlreadyFinalized: "This market has already been finalized.",
-  MarketNotClosed: "This market hasn't closed yet.",
-  WrongMode: "This action doesn't match this market's resolution mode.",
-  StalePrice: "The price feed is too stale to resolve this market.",
-  PriceUnavailable: "No price is available to resolve this market yet.",
-  // reasoning-registry
-  TraceNotFound: "This reasoning trace isn't on-chain.",
-  AgentAlreadyRegistered: "This agent is already registered.",
-  AgentNotRegistered: "This agent isn't registered.",
-  EmptyAction: "The trace action can't be empty.",
-  EmptyCid: "The trace needs an IPFS CID.",
-  Unauthorized: "Your wallet isn't allowed to do this.",
-  // shared across contracts
-  NotInitialized: "This contract hasn't been initialized yet.",
-  InvalidFee: "Fees can be at most 10% (1000 bps).",
-  InvalidProbability: "Initial probabilities must add up to 100%.",
-  InvalidCloseTime: "The market's close time must be in the future.",
-};
-
-export const FRIENDLY_NAMES = Object.keys(FRIENDLY) as readonly string[];
-export const UNFRIENDLY_ALLOWLIST = ["NotInitialized", "InvalidConfig"] as const;
-
 export interface ErrorContext {
   /** Contract the call targeted; used when diagnostic events cannot attribute the error. */
   contract?: ContractName;
@@ -105,23 +26,9 @@ export interface ErrorContext {
 }
 
 export interface DescribedError {
-  kind:
-    | "stale-sequence"
-    | "low-reserve"
-    | "rejected"
-    | "insufficient-balance"
-    | "insufficient-xlm"
-    | "account-not-found"
-    | "no-trustline"
-    | "contract"
-    | "wrong-network"
-    | "disconnected"
-    | "network"
-    | "submission"
-    | "expired"
-    | "archived"
-    | "bad-auth"
-    | "unknown";
+  kind: DescribedErrorKind;
+  errorCode: ErrorCode;
+  params?: Record<string, string | number>;
   message: string;
   action?: "enable-usdc";
   /** Contract error name, e.g. "SlippageExceeded", or tx result code when known. */
@@ -154,7 +61,6 @@ function safeJson(v: unknown): string {
     return "";
   }
 }
-
 
 const USDC_KINDS: Record<number, "insufficient-balance" | "no-trustline"> = {
   10: "insufficient-balance",
@@ -257,24 +163,44 @@ function describeContractCode(name: string | undefined, code: number, contract: 
   if (contract === "usdc") {
     const kind = USDC_KINDS[code];
     if (kind === "insufficient-balance") {
-      return { kind, code: "USDCInsufficientBalance", message: "You don't have enough USDC for this.", contract };
+      return {
+        kind,
+        errorCode: "kind.insufficient-balance",
+        code: "USDCInsufficientBalance",
+        message: messageFor("kind.insufficient-balance"),
+        contract,
+      };
     }
     if (kind === "no-trustline") {
       return {
         kind,
+        errorCode: "kind.no-trustline",
         code: "USDCNoTrustline",
-        message: "Your account has no USDC trustline. Add the USDC asset in your wallet first.",
+        message: messageFor("kind.no-trustline"),
         action: "enable-usdc",
         contract,
       };
     }
-    return { kind: "contract", code: `USDCError${code}`, message: `The USDC token contract rejected this (error ${code}).`, contract };
+    return {
+      kind: "contract",
+      errorCode: "kind.contract",
+      code: `USDCError${code}`,
+      message: `The USDC token contract rejected this (error ${code}).`,
+      contract,
+    };
   }
   if (name) {
-    const message = CONTRACT_FRIENDLY[contract as ContractName]?.[name] ?? FRIENDLY[name] ?? `The contract rejected this (${name}).`;
-    return { kind: "contract", code: name, message, contract };
+    const errorCode: ContractCode = `contract.${contract as ContractName}.${name}`;
+    const message = messageFor(errorCode);
+    return { kind: "contract", errorCode, code: name, message, contract };
   }
-  return { kind: "contract", code: `ContractError${code}`, message: `The contract rejected this (error ${code}).`, contract };
+  return {
+    kind: "contract",
+    errorCode: "kind.contract",
+    code: `ContractError${code}`,
+    message: `The contract rejected this (error ${code}).`,
+    contract,
+  };
 }
 
 /** Structured SDK classes, checked by name so bundling does not matter. */
@@ -282,20 +208,41 @@ function describeSdkClass(err: unknown): DescribedError | null {
   const name = errorName(err);
   const apiCode = err && typeof err === "object" ? (err as { code?: unknown }).code : undefined;
   if (apiCode === "BACKEND_UNREACHABLE") {
-    return { kind: "network", message: "Couldn't reach the backend. Check your connection and try again." };
+    return {
+      kind: "network",
+      errorCode: "kind.network",
+      message: messageFor("kind.network"),
+    };
   }
   if (!name) return null;
-  if (/UserRejected|UserDeclined/i.test(name)) return { kind: "rejected", message: "You cancelled the request in your wallet." };
-  if (/NoSigner/i.test(name)) return { kind: "disconnected", message: "Your wallet has no signer for this account. Reconnect it and try again." };
+  if (/UserRejected|UserDeclined/i.test(name)) {
+    return {
+      kind: "rejected",
+      errorCode: "kind.rejected",
+      message: messageFor("kind.rejected"),
+    };
+  }
+  if (/NoSigner/i.test(name)) {
+    return {
+      kind: "disconnected",
+      errorCode: "kind.disconnected",
+      message: messageFor("kind.disconnected"),
+    };
+  }
   if (/ExpiredState|RestoreFailure|RestoreError|RestorationFailure/i.test(name)) {
     return {
       kind: "archived",
+      errorCode: "kind.archived",
       code: "archived-entry",
-      message: "The transaction simulation is stale (archived entries or changed footprint). Prepare it again with a fresh quote.",
+      message: messageFor("kind.archived"),
     };
   }
   if (/ExternalService/i.test(name)) {
-    return { kind: "network", message: "Couldn't reach the Stellar network. Check your connection and try again." };
+    return {
+      kind: "network",
+      errorCode: "kind.network",
+      message: messageFor("kind.network"),
+    };
   }
   return null;
 }
@@ -311,42 +258,52 @@ export function describeError(err: unknown, ctxOrContract: ContractName | ErrorC
   if (resultCode === "txBadSeq") {
     return {
       kind: "stale-sequence",
+      errorCode: "kind.stale-sequence",
       code: "txBadSeq",
-      message: "Another transaction from this account changed the sequence. Prepare it again with a fresh quote.",
+      message: messageFor("kind.stale-sequence"),
     };
   }
   if (resultCode === "txTooLate") {
     return {
       kind: "expired",
+      errorCode: "kind.expired",
       code: "tx_too_late",
-      message: "This transaction expired before it was submitted. Prepare it again with a fresh quote.",
+      message: messageFor("kind.expired"),
     };
   }
   if (resultCode === "txInsufficientFee") {
     return {
       kind: "submission",
+      errorCode: "kind.submission",
       code: "txInsufficientFee",
       message: "The network fee bid was too low. Please try again with a higher fee.",
     };
   }
   if (resultCode === "txInsufficientBalance") {
-    return { kind: "insufficient-xlm", code: "txInsufficientBalance", message: "You don't have enough spendable XLM to pay the network fee." };
+    return {
+      kind: "insufficient-xlm",
+      errorCode: "kind.insufficient-xlm",
+      code: "txInsufficientBalance",
+      message: messageFor("kind.insufficient-xlm"),
+    };
   }
   if (resultCode === "txBadAuth" || resultCode === "txBadAuthExtra") {
     return {
       kind: "bad-auth",
+      errorCode: "kind.bad-auth",
       code: resultCode === "txBadAuthExtra" ? "tx_bad_auth_extra" : "tx_bad_auth",
       message: resultCode === "txBadAuthExtra"
         ? "This transaction has extra signatures the network doesn't expect. Remove unknown signatures and try again."
-        : "This account needs more signatures to meet its threshold. Collect the remaining signatures before submitting.",
+        : messageFor("kind.bad-auth"),
     };
   }
 
   if (classifySequenceError(err)) {
     return {
       kind: "stale-sequence",
+      errorCode: "kind.stale-sequence",
       code: "txBadSeq",
-      message: "Another transaction from this account changed the sequence. Prepare it again with a fresh quote.",
+      message: messageFor("kind.stale-sequence"),
     };
   }
   // Multisig: threshold not met at submission. Check the longer `_extra`
@@ -354,6 +311,7 @@ export function describeError(err: unknown, ctxOrContract: ContractName | ErrorC
   if (/tx_bad_auth_extra|txBadAuthExtra/i.test(text)) {
     return {
       kind: "bad-auth",
+      errorCode: "kind.bad-auth",
       code: "tx_bad_auth_extra",
       message: "This transaction has extra signatures the network doesn't expect. Remove unknown signatures and try again.",
     };
@@ -361,15 +319,17 @@ export function describeError(err: unknown, ctxOrContract: ContractName | ErrorC
   if (/tx_bad_auth|txBadAuth/i.test(text)) {
     return {
       kind: "bad-auth",
+      errorCode: "kind.bad-auth",
       code: "tx_bad_auth",
-      message: "This account needs more signatures to meet its threshold. Collect the remaining signatures before submitting.",
+      message: messageFor("kind.bad-auth"),
     };
   }
   if (/tx_too_late|txTooLate/i.test(text)) {
     return {
       kind: "expired",
+      errorCode: "kind.expired",
       code: "tx_too_late",
-      message: "This transaction expired before it was submitted. Prepare it again with a fresh quote.",
+      message: messageFor("kind.expired"),
     };
   }
   const sdk = describeSdkClass(err);
@@ -387,48 +347,85 @@ export function describeError(err: unknown, ctxOrContract: ContractName | ErrorC
   if (/archived|restore|expired.*footprint|footprint.*expired/i.test(text)) {
     return {
       kind: "archived",
+      errorCode: "kind.archived",
       code: "archived-entry",
-      message: "The transaction simulation is stale (archived entries or changed footprint). Prepare it again with a fresh quote.",
+      message: messageFor("kind.archived"),
     };
   }
   if (/user (rejected|declined|denied)|rejected by (the )?user|request (was )?rejected|declined|cancell?ed by user|user closed/i.test(text)) {
-    return { kind: "rejected", message: "You cancelled the request in your wallet." };
+    return {
+      kind: "rejected",
+      errorCode: "kind.rejected",
+      message: messageFor("kind.rejected"),
+    };
   }
   // The kit throws this after a reload when the phone's WalletConnect session has ended.
   if (/No WalletConnect session found/i.test(text)) {
-    return { kind: "disconnected", message: "Your mobile wallet session ended. Connect your mobile wallet again." };
+    return {
+      kind: "disconnected",
+      errorCode: "kind.disconnected",
+      message: "Your mobile wallet session ended. Connect your mobile wallet again.",
+    };
   }
   // The SDK throws this when the source account has no ledger entry (never funded).
   if (/Account not found|op_no_source_account|tx_no_source_account|txNoAccount/i.test(text)) {
-    return { kind: "account-not-found", message: "Your Stellar account isn't activated yet. Fund it with XLM first." };
+    return {
+      kind: "account-not-found",
+      errorCode: "kind.account-not-found",
+      message: messageFor("kind.account-not-found"),
+    };
   }
   if (/trustline entry is missing|TrustlineMissing|trustline.*(missing|not found)|op_no_trust/i.test(text)) {
     return {
       kind: "no-trustline",
-      message: "Your account has no USDC trustline. Add the USDC asset in your wallet first.",
+      errorCode: "kind.no-trustline",
+      message: messageFor("kind.no-trustline"),
       action: "enable-usdc",
     };
   }
-  if (/op_low_reserve|opLowReserve|txInsufficientBalance|tx_insufficient_balance/i.test(text)) {
-    return { kind: "insufficient-xlm", message: "Your account needs more spendable XLM to add the USDC trustline." };
+  if (/op_low_reserve|opLowReserve/i.test(text)) {
+    return {
+      kind: "insufficient-xlm",
+      errorCode: "kind.insufficient-xlm",
+      message: "Your account needs more spendable XLM to add the USDC trustline.",
+    };
   }
   if (/balance is not sufficient|resulting balance is not within the allowed range|insufficient (balance|funds)|BalanceError|op_underfunded/i.test(text)) {
-    return { kind: "insufficient-balance", message: "You don't have enough USDC for this." };
+    return {
+      kind: "insufficient-balance",
+      errorCode: "kind.insufficient-balance",
+      message: messageFor("kind.insufficient-balance"),
+    };
   }
-  if (/op_low_reserve|txInsufficientBalance|tx_insufficient_balance/i.test(text)) {
-    return { kind: "insufficient-xlm", message: "You don't have enough spendable XLM to pay the network fee." };
+  if (/txInsufficientBalance|tx_insufficient_balance/i.test(text)) {
+    return {
+      kind: "insufficient-xlm",
+      errorCode: "kind.insufficient-xlm",
+      message: messageFor("kind.insufficient-xlm"),
+    };
   }
   if (err instanceof Error && err.name === "NetworkMismatchError") {
-    return { kind: "wrong-network", message: err.message };
+    return {
+      kind: "wrong-network",
+      errorCode: "kind.wrong-network",
+      params: { network: NETWORK_LABEL },
+      message: err.message,
+    };
   }
   if (/wrong network|network mismatch/i.test(text)) {
-    return { kind: "wrong-network", message: `Switch your wallet to ${NETWORK_LABEL} and try again.` };
+    return {
+      kind: "wrong-network",
+      errorCode: "kind.wrong-network",
+      params: { network: NETWORK_LABEL },
+      message: messageFor("kind.wrong-network", { network: NETWORK_LABEL }),
+    };
   }
   // Admin-gated contract calls (e.g. market-core's require_admin) fail auth
   // for any non-admin signer; name this distinctly from a wallet rejection.
   if (/Error\(Auth, InvalidAction\)|HostError: Error\(Auth/i.test(text)) {
     return {
       kind: "contract",
+      errorCode: "kind.contract",
       code: "NotAdmin",
       message: "Only the contract admin can do this. Your wallet isn't the admin.",
     };
@@ -439,17 +436,44 @@ export function describeError(err: unknown, ctxOrContract: ContractName | ErrorC
     const name = TABLES[contract][Number(code[1])]?.message;
     return describeContractCode(name, Number(code[1]), contract);
   }
-  // A binding Err may carry just the name.
-  const named = Object.keys(FRIENDLY).find((n) => new RegExp(`\\b${n}\\b`).test(text));
-  if (named) return { kind: "contract", code: named, message: FRIENDLY[named] };
+
+  // Bare-name matches: search caller's contract table first, then others, to avoid collisions.
+  const callerNames = Object.values(TABLES[contract]).map((e) => e.message);
+  const callerFound = callerNames.find((n) => new RegExp(`\\b${n}\\b`).test(text));
+  if (callerFound) {
+    return describeContractCode(callerFound, 0, contract);
+  }
+  const otherContracts = (["marketCore", "treasury", "resolver", "reasoningRegistry"] as const).filter(
+    (c) => c !== contract,
+  );
+  for (const other of otherContracts) {
+    const names = Object.values(TABLES[other]).map((e) => e.message);
+    const found = names.find((n) => new RegExp(`\\b${n}\\b`).test(text));
+    if (found) {
+      return describeContractCode(found, 0, other);
+    }
+  }
 
   if (/\b429\b|too many requests|rate.?limit/i.test(text)) {
-    return { kind: "network", code: "rate-limited", message: "The Stellar network is busy right now. Try again in a moment." };
+    return {
+      kind: "network",
+      errorCode: "kind.network",
+      code: "rate-limited",
+      message: "The Stellar network is busy right now. Try again in a moment.",
+    };
   }
   if (/Failed to fetch|NetworkError|ECONNREFUSED|timed? ?out|ETIMEDOUT/i.test(text)) {
-    return { kind: "network", message: "Couldn't reach the Stellar network. Check your connection and try again." };
+    return {
+      kind: "network",
+      errorCode: "kind.network",
+      message: messageFor("kind.network"),
+    };
   }
-  return { kind: "unknown", message: "Something went wrong. Please try again." };
+  return {
+    kind: "unknown",
+    errorCode: "kind.unknown",
+    message: messageFor("kind.unknown"),
+  };
 }
 
 /**
@@ -462,6 +486,7 @@ export function describeSubmission(
   if (response.status === "TRY_AGAIN_LATER") {
     return {
       kind: "submission",
+      errorCode: "kind.submission",
       submission: "try-again-later",
       message: "The network is busy. Please try again in a moment.",
     };
@@ -469,6 +494,7 @@ export function describeSubmission(
   if (response.status === "DUPLICATE") {
     return {
       kind: "submission",
+      errorCode: "kind.submission",
       submission: "duplicate",
       message: "This transaction is already in flight.",
     };
@@ -485,24 +511,27 @@ export function describeSubmission(
   if (resultCode === "txBadSeq") {
     return {
       kind: "stale-sequence",
+      errorCode: "kind.stale-sequence",
       code: "txBadSeq",
       submission: "rejected-by-network",
       resultCode,
-      message: "Another transaction from this account changed the sequence. Prepare it again with a fresh quote.",
+      message: messageFor("kind.stale-sequence"),
     };
   }
   if (resultCode === "txBadAuth") {
     return {
       kind: "bad-auth",
+      errorCode: "kind.bad-auth",
       code: "tx_bad_auth",
       submission: "rejected-by-network",
       resultCode,
-      message: "This account needs more signatures to meet its threshold. Collect the remaining signatures before submitting.",
+      message: messageFor("kind.bad-auth"),
     };
   }
   if (resultCode === "txBadAuthExtra") {
     return {
       kind: "bad-auth",
+      errorCode: "kind.bad-auth",
       code: "tx_bad_auth_extra",
       submission: "rejected-by-network",
       resultCode,
@@ -512,6 +541,7 @@ export function describeSubmission(
   if (resultCode === "txInsufficientFee") {
     return {
       kind: "submission",
+      errorCode: "kind.submission",
       submission: "rejected-by-network",
       resultCode,
       message: "The network fee bid was too low. Please try again with a higher fee.",
@@ -520,18 +550,20 @@ export function describeSubmission(
   if (resultCode === "txTooLate") {
     return {
       kind: "expired",
+      errorCode: "kind.expired",
       code: "tx_too_late",
       submission: "rejected-by-network",
       resultCode,
-      message: "This transaction expired before it was submitted. Prepare it again with a fresh quote.",
+      message: messageFor("kind.expired"),
     };
   }
   if (resultCode === "txInsufficientBalance") {
     return {
       kind: "insufficient-xlm",
+      errorCode: "kind.insufficient-xlm",
       submission: "rejected-by-network",
       resultCode,
-      message: "You don't have enough spendable XLM to pay the network fee.",
+      message: messageFor("kind.insufficient-xlm"),
     };
   }
 
@@ -566,6 +598,7 @@ export function describeSubmission(
 
   return {
     kind: "submission",
+    errorCode: "kind.submission",
     submission: "rejected-by-network",
     resultCode: resultCode ?? "txFailed",
     message: resultCode
