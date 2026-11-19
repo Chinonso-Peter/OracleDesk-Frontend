@@ -19,6 +19,7 @@ import { TransactionTrackerProvider } from "./tx-tracker";
 import { storedPushWallet, unsubscribe as unsubscribePush } from "@/lib/notifications/push";
 import { LedgerInvalidator } from "./ledger-invalidation";
 import { getStoredSessionId, onAuthInvalid, onAuthSessionChanged } from "@/lib/api/client";
+import { startRefreshScheduler } from "@/lib/api/refresh-scheduler";
 import { UserScopeContext, UserScopeStore } from "@/lib/query/scope";
 import { WalletNetworkStore, type WalletNetwork } from "./wallet-network";
 import type { RpcNetworkState } from "./network-check";
@@ -304,6 +305,9 @@ export function WalletProvider({ children, kitLoader = loadStellarWalletsKit, rp
   // Starts the kit, restores a session the kit persisted (never redirects or
   // prompts), and tears the kit subscriptions down on unmount.
   useEffect(() => interpreter.start(), [interpreter]);
+
+  // Issue #269: refresh the bearer token before it expires, from one tab.
+  useEffect(() => startRefreshScheduler(), []);
 
   // In cookie mode the server is the source of truth for the session wallet:
   // migrate a legacy localStorage token once, then ask GET /auth/session.
