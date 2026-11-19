@@ -5,7 +5,13 @@ import { messageFor } from "@/lib/errors/messages";
 
 export { API_URL };
 
-export interface ApiRequestOptions { expectScope?: UserScope; signal?: AbortSignal; trace?: TraceCtx }
+export interface ApiRequestOptions {
+  expectScope?: UserScope;
+  signal?: AbortSignal;
+  trace?: TraceCtx;
+  /** Internal flag to prevent infinite loops when retrying after step-up auth. */
+  _stepUpRetried?: boolean;
+}
 const sessionListeners = new Set<() => void>();
 const authInvalidListeners = new Set<() => void>();
 export function onAuthSessionChanged(listener: () => void) {
@@ -15,6 +21,16 @@ export function onAuthSessionChanged(listener: () => void) {
 export function onAuthInvalid(listener: () => void) {
   authInvalidListeners.add(listener);
   return () => { authInvalidListeners.delete(listener); };
+}
+
+export type StepUpPromptHandler = (details: { maxAgeSeconds?: number; reauthenticate?: boolean }) => Promise<boolean>;
+let stepUpHandler: StepUpPromptHandler | null = null;
+
+export function registerStepUpHandler(handler: StepUpPromptHandler | null) {
+  stepUpHandler = handler;
+  return () => {
+    if (stepUpHandler === handler) stepUpHandler = null;
+  };
 }
 
 export interface ApiErrorPayload {
@@ -337,6 +353,16 @@ async function request<T>(
   assertScope();
 
   if (!response.ok || envelope?.ok === false) {
+    const isStepUp = response.status === 403 && (apiError?.code === "STEP_UP_REQUIRED" || (apiError?.details as any)?.reauthenticate === true);
+    if (isStepUp && !options._stepUpRetried && stepUpHandler) {
+      const stepUpDetails = (apiError?.details as { maxAgeSeconds?: number; reauthenticate?: boolean }) ?? { reauthenticate: true };
+      const confirmed = await stepUpHandler(stepUpDetails);
+      if (confirmed) {
+        // Re-execute request once with _stepUpRetried flag set to true
+        return request<T>(path, init, params, { ...options, _stepUpRetried: true });
+      }
+    }
+
     const authFailure = ["TOKEN_EXPIRED", "INVALID_TOKEN", "UNAUTHORIZED"].includes(apiError?.code ?? "") ||
       (response.status === 401 && !apiError);
     const sessionIsCurrent = requestSessionId === getStoredSessionId();
