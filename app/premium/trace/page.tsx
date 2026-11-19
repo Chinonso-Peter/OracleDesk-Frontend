@@ -67,7 +67,7 @@ function ReceiptRow({ event }: { event: PaymentEvent }) {
       </div>
       {event.txHash ? (
         <a
-          href={explorerTx(event.txHash)}
+          href={explorerTx(event.txHash) ?? undefined}
           target="_blank"
           rel="noopener noreferrer"
           className="font-data-mono text-[11px] text-primary hover:underline shrink-0"
@@ -368,7 +368,7 @@ function UnlockPremiumTraceContent() {
                   <span>{renderTxPhase(transfer.phase) ?? "Processing payment…"}</span>
                   {"hash" in transfer.phase && transfer.phase.hash && (
                     <a
-                      href={explorerTx(transfer.phase.hash)}
+                      href={explorerTx(transfer.phase.hash) ?? undefined}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="underline font-data-mono"

@@ -11,6 +11,7 @@ import { CONTRACTS, explorerAccount } from "@/lib/stellar/config";
 import { reasoningRegistry } from "@/lib/stellar/clients";
 import { read, bytesToHex } from "@/lib/stellar/typed-call";
 import { ipfsUrl, verifyTraceInWorker, type GatewayAttempt, type CidCheck, type TraceCheck } from "@/lib/stellar/trace";
+import { parseRecordId, parseU64 } from "@/lib/validation/ids";
 import { SafeTraceViewer } from "@/components/safe-trace-viewer";
 import { MarketTraceAudit } from "@/components/market-trace-audit";
 import {
@@ -85,10 +86,14 @@ function VerifyTraceContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const queryClient = useQueryClient();
-  const traceId = searchParams.get("traceId");
-  const onChainTraceIdParam = searchParams.get("onChainTraceId");
-  const marketIdParam = searchParams.get("marketId");
-  const onChainMarketIdParam = searchParams.get("onChainMarketId");
+  const rawTraceId = searchParams.get("traceId");
+  const traceId = parseRecordId(rawTraceId);
+  const rawOnChainTraceId = searchParams.get("onChainTraceId");
+  const onChainTraceIdParam = parseU64(rawOnChainTraceId);
+  const marketIdParam = parseRecordId(searchParams.get("marketId"));
+  const onChainMarketIdParam = parseU64(searchParams.get("onChainMarketId"));
+  const invalidTraceLink = Boolean(rawTraceId) && !traceId;
+  const invalidChainLink = Boolean(rawOnChainTraceId) && !onChainTraceIdParam;
 
   const [activeTab, setActiveTab] = useState<"trace" | "market">(
     marketIdParam || onChainMarketIdParam ? "market" : "trace",
@@ -129,7 +134,7 @@ function VerifyTraceContent() {
   };
 
   const startVerification = async () => {
-    if (isVerifying || isComplete || (!traceId && !onChainTraceIdParam)) return;
+    if (isVerifying || isComplete || invalidTraceLink || invalidChainLink || (!traceId && !onChainTraceIdParam)) return;
     setIsVerifying(true);
     setStatusLabel("Checking…");
     setTerminalLogs([]);
@@ -137,18 +142,20 @@ function VerifyTraceContent() {
 
     try {
       // 1. Which on-chain trace?
-      let onChainTraceId = onChainTraceIdParam;
+      let onChainTraceId: string | null = onChainTraceIdParam;
       if (!onChainTraceId && traceId) {
         log(">> [INIT] Looking up the trace in OracleDesk…", 10);
         const trace = await getTrace(traceId);
         onChainTraceId = trace.onChainTraceId ?? null;
         if (!onChainTraceId) return fail("This trace hasn't been published on-chain yet, so there is nothing to verify against.");
       }
+      const traceIdOnChain = parseU64(onChainTraceId);
+      if (!traceIdOnChain) return fail("This link has an invalid trace id.");
 
       // 2. Read the commitment from reasoning-registry.
-      log(`>> [CHAIN] reasoning_registry.get_trace(${onChainTraceId}) on ${CONTRACTS.reasoningRegistry.slice(0, 8)}…`, 30);
+      log(`>> [CHAIN] reasoning_registry.get_trace(${traceIdOnChain}) on ${CONTRACTS.reasoningRegistry.slice(0, 8)}…`, 30);
       const onChain = read(
-        await reasoningRegistry().get_trace({ trace_id: BigInt(onChainTraceId as string) }),
+        await reasoningRegistry().get_trace({ trace_id: BigInt(traceIdOnChain) }),
         "reasoningRegistry",
       );
       const storedHash = bytesToHex(onChain.trace_hash);
@@ -176,7 +183,7 @@ function VerifyTraceContent() {
       const result: VerificationResult = {
         verified: check.status === "verified",
         status: check.status,
-        onChainTraceId: onChainTraceId as string,
+        onChainTraceId: traceIdOnChain,
         ipfsCid: onChain.ipfs_cid,
         storedHash,
         computedHash: check.status === "unavailable" ? null : check.computedHash,
@@ -190,7 +197,7 @@ function VerifyTraceContent() {
       } else {
         log(`>> [LOCAL] sha256 of the bytes received: ${check.computedHash}`, 90);
       }
-      queryClient.setQueryData(["stellar", "trace", onChainTraceId], undefined);
+      queryClient.setQueryData(["stellar", "trace", traceIdOnChain], undefined);
       completeVerification(result);
     } catch (err) {
       abortRef.current = null;
@@ -402,12 +409,12 @@ function VerifyTraceContent() {
                     </div>
                     <div className="flex flex-col gap-2">
                       {verificationResult.ipfsCid && (
-                        <a className={`flex items-center gap-2 px-4 py-2 bg-white border ${verificationResult.verified ? 'border-secondary text-secondary' : 'border-error text-error'} font-label-caps rounded hover:brightness-95 transition-all text-xs`} href={ipfsUrl(verificationResult.ipfsCid)} target="_blank" rel="noopener noreferrer">
+                        <a className={`flex items-center gap-2 px-4 py-2 bg-white border ${verificationResult.verified ? 'border-secondary text-secondary' : 'border-error text-error'} font-label-caps rounded hover:brightness-95 transition-all text-xs`} href={ipfsUrl(verificationResult.ipfsCid) ?? undefined} target="_blank" rel="noopener noreferrer">
                           <Icon name="link" className="text-sm" />
                           View IPFS
                         </a>
                       )}
-                      <a className={`flex items-center gap-2 px-4 py-2 bg-white border ${verificationResult.verified ? 'border-secondary text-secondary' : 'border-error text-error'} font-label-caps rounded hover:brightness-95 transition-all text-xs`} href={explorerAccount(CONTRACTS.reasoningRegistry)} target="_blank" rel="noopener noreferrer">
+                      <a className={`flex items-center gap-2 px-4 py-2 bg-white border ${verificationResult.verified ? 'border-secondary text-secondary' : 'border-error text-error'} font-label-caps rounded hover:brightness-95 transition-all text-xs`} href={explorerAccount(CONTRACTS.reasoningRegistry) ?? undefined} target="_blank" rel="noopener noreferrer">
                         <Icon name="search" className="text-sm" />
                         View on Stellar Expert
                       </a>

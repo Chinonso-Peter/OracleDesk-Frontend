@@ -10,6 +10,7 @@ import { QuestionVerificationBadge } from "@/components/question-verification-ba
 import { ResolverStatusPanel } from "@/components/resolver-status-panel";
 import { getMarketByOnChainId, getResolution } from "@/lib/api/markets";
 import { ApiError } from "@/lib/api/client";
+import { parseRecordId, parseU64 } from "@/lib/validation/ids";
 import { useOnChainMarket, usePosition } from "@/lib/hooks/useStellar";
 import { useWalletAddress } from "@/lib/contexts/WalletContext";
 import { useViewedAddress } from "@/lib/hooks/useViewedAddress";
@@ -54,8 +55,11 @@ function MarketQuickViewContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const fromParam = searchParams.get("from");
-  const marketId = searchParams.get("marketId");
-  const onChainIdParam = searchParams.get("onChainId");
+  const rawMarketId = searchParams.get("marketId");
+  const marketId = parseRecordId(rawMarketId);
+  const rawOnChainId = searchParams.get("onChainId");
+  const onChainIdParam = parseU64(rawOnChainId);
+  const invalidLink = (Boolean(rawMarketId) && !marketId) || (Boolean(rawOnChainId) && !onChainIdParam);
   const initialSide = searchParams.get("side") === "NO" ? "No" : "Yes";
   const fromPush = searchParams.get("from") === "push";
 
@@ -82,7 +86,7 @@ function MarketQuickViewContent() {
   // Opened from an on-chain id: the backend may or may not know this market.
   const backendByChainId = useQuery({
     queryKey: ["market-by-chain-id", onChainIdParam],
-    queryFn: () => getMarketByOnChainId(onChainIdParam as string),
+    queryFn: () => getMarketByOnChainId(onChainIdParam!),
     enabled: Boolean(onChainIdParam) && !marketId,
     retry: (count, err) => !(err instanceof ApiError && err.status === 404) && count < 2,
   });
@@ -144,14 +148,14 @@ function MarketQuickViewContent() {
     );
   }
 
-  if (notFound) {
+  if (notFound || invalidLink) {
     return (
       <main className="relative min-h-[calc(100vh-64px)] overflow-hidden bg-surface flex flex-col items-center justify-center p-6 text-center">
         <Dialog open onOpenChange={(o) => !o && closeToMarkets()}>
           <DialogContent aria-describedby={undefined} className="flex flex-col items-center justify-center p-6 text-center max-w-md">
             <Icon name="error" className="text-error text-6xl mb-4" />
             <DialogTitle className="text-headline-md mb-2">Market not found</DialogTitle>
-            <p className="text-on-surface-variant mb-6">The market you are looking for does not exist or could not be loaded.</p>
+            <p className="text-on-surface-variant mb-6">{invalidLink ? "This link has an invalid market id." : "The market you are looking for does not exist or could not be loaded."}</p>
             <button
               type="button"
               onClick={closeToMarkets}
@@ -170,7 +174,7 @@ function MarketQuickViewContent() {
   const categoryLabel = market?.category ?? view?.market.category.tag ?? "";
   const liquidityText = view
     ? `$${formatUsdc(view.market.sets_minted, { maxDecimals: 2, grouping: true })}`
-    : market ? `$${market.totalLiquidity.toLocaleString()}` : "—";
+    : market ? `${formatUsdcDisplay(BigInt(Math.round(market.totalLiquidity)))}` : "—";
   const w24 = priceWindow.data;
   const change = w24?.changeBps ?? null;
   const trend: "up" | "down" | "flat" = change === null || change === 0n ? "flat" : change > 0n ? "up" : "down";
@@ -374,7 +378,7 @@ function MarketQuickViewContent() {
                 </span>
                 {onChainMarketId !== null && (
                   <Link
-                    href={`/reasoning/verify?marketId=${market?.id ?? onChainMarketId}&onChainMarketId=${onChainMarketId}`}
+                    href={`/reasoning/verify?marketId=${encodeURIComponent(market?.id ?? String(onChainMarketId))}&onChainMarketId=${encodeURIComponent(String(onChainMarketId))}`}
                     className="inline-flex items-center gap-1 text-[11px] font-label-caps font-bold text-primary hover:underline"
                   >
                     <Icon name="fact_check" className="text-xs" />
@@ -396,10 +400,10 @@ function MarketQuickViewContent() {
             </div>
             <div className="flex items-center gap-3 w-full sm:w-auto">
               {market && (
-                <Link href={`/markets/terminal?marketId=${market.id}`} className="flex-1 sm:flex-none font-label-caps text-label-caps text-primary hover:underline px-4 transition-all font-bold text-center">View Full Terminal</Link>
+                <Link href={`/markets/terminal?marketId=${encodeURIComponent(market.id)}`} className="flex-1 sm:flex-none font-label-caps text-label-caps text-primary hover:underline px-4 transition-all font-bold text-center">View Full Terminal</Link>
               )}
               {market && latestTrace && (
-                <Link href={`/copy-trade?marketId=${market.id}&traceId=${latestTrace.id}`} className="flex-1 sm:flex-none bg-primary text-primary-foreground px-6 py-2.5 rounded-lg font-label-caps text-label-caps hover:bg-primary-container active:scale-95 transition-all shadow-sm font-bold uppercase text-center">Copy Agent</Link>
+                <Link href={`/copy-trade?marketId=${encodeURIComponent(market.id)}&traceId=${encodeURIComponent(latestTrace.id)}`} className="flex-1 sm:flex-none bg-primary text-primary-foreground px-6 py-2.5 rounded-lg font-label-caps text-label-caps hover:bg-primary-container active:scale-95 transition-all shadow-sm font-bold uppercase text-center">Copy Agent</Link>
               )}
             </div>
           </div>

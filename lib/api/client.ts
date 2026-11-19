@@ -154,8 +154,49 @@ function getBrowserStorage() {
   try { return typeof window === "undefined" ? null : window.localStorage; } catch { return null; }
 }
 
+const INVALID_SEGMENT = /[\/\\\x00-\x1f]/;
+
+function decodeSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
+/**
+ * Builds an API path with encoded, validated segments (issue #120). A segment
+ * that is empty, `.`/`..`, contains a slash (raw or encoded) or non-ASCII is
+ * refused instead of being normalised into a different endpoint.
+ */
+export function apiPath(strings: TemplateStringsArray, ...segments: Array<string | number | bigint>): string {
+  let path = strings[0] ?? "";
+  segments.forEach((raw, index) => {
+    const value = String(raw);
+    const decoded = decodeSegment(value);
+    if (
+      value.length === 0 ||
+      value.length > 256 ||
+      decoded === "." ||
+      decoded === ".." ||
+      INVALID_SEGMENT.test(decoded) ||
+      /[^\x20-\x7e]/.test(decoded)
+    ) {
+      throw new ApiError({ code: "INVALID_PATH", message: "The request path is invalid." }, 0);
+    }
+    path += encodeURIComponent(value) + (strings[index + 1] ?? "");
+  });
+  return path;
+}
+
 function buildUrl(path: string, params?: QueryParams) {
-  const url = new URL(path.replace(/^\//, ""), `${API_URL.replace(/\/$/, "")}/`);
+  const baseUrl = `${API_URL.replace(/\/$/, "")}/`;
+  const url = new URL(path.replace(/^\//, ""), baseUrl);
+  const base = new URL(baseUrl);
+  const basePath = base.pathname.replace(/\/$/, "");
+  if (url.origin !== base.origin || !(url.pathname === basePath || url.pathname.startsWith(`${basePath}/`))) {
+    throw new ApiError({ code: "INVALID_PATH", message: "The request path is invalid." }, 0);
+  }
 
   if (params) {
     Object.entries(params).forEach(([key, value]) => {

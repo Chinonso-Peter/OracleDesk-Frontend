@@ -19,6 +19,7 @@ import { userMessage } from "@/lib/errors/display";
 import { useMarket } from "@/lib/hooks/useMarkets";
 import { useQuoteBuy, useUsdcBalance, useAccountReserve, usePrepareBuy, useOnChainMarket, fetchOnChainMarketBySimulation, useUsdcTrustline, useEnableUsdc, useUsdcBalanceState, type PreparedWriteReview } from "@/lib/hooks/useStellar";
 import { explorerTx, NETWORK_LABEL } from "@/lib/stellar/config";
+import { parseRecordId } from "@/lib/validation/ids";
 import { formatUsdc, formatXlm, minOut, bpsToPercent, probabilityToBps, tryParseUsdc, BPS } from "@/lib/stellar/units";
 import { chooseCollateral, maxCollateralForEdge, quoteCopy, type CopyMarket, type CopyQuote, type SizingMode } from "@/lib/stellar/quote";
 import type { OutcomeTag } from "@/lib/stellar/clients";
@@ -116,12 +117,16 @@ function CopyTradeContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const traceId = searchParams.get("traceId");
-  const marketIdParam = searchParams.get("marketId");
+  const rawTraceId = searchParams.get("traceId");
+  const traceId = parseRecordId(rawTraceId);
+  const marketIdParam = parseRecordId(searchParams.get("marketId"));
+  const invalidTraceLink = Boolean(rawTraceId) && !traceId;
 
   const traceQuery = useTrace(traceId ?? undefined);
   const trace = traceQuery.data ?? null;
-  const traceError = traceQuery.isError ? "We couldn't load this reasoning trace." : null;
+  const traceError = invalidTraceLink
+    ? "This link has an invalid trace id."
+    : traceQuery.isError ? "We couldn't load this reasoning trace." : null;
   const { data: market } = useMarket(marketIdParam ?? trace?.marketId ?? undefined);
   const onChainMarketId = market?.onChainMarketId ?? null;
   const onChainMarket = useOnChainMarket(onChainMarketId);
@@ -362,7 +367,8 @@ function CopyTradeContent() {
         `You received ${formatUsdc(result.sharesOut, { maxDecimals: 2 })} ${side.toUpperCase()} shares.` +
           (result.txHash ? ` Transaction ${result.txHash.slice(0, 10)}…` : ""),
       );
-      if (result.txHash) window.open(explorerTx(result.txHash), "_blank", "noopener,noreferrer");
+      const explorerUrl = result.txHash ? explorerTx(result.txHash) : null;
+      if (explorerUrl) window.open(explorerUrl, "_blank", "noopener,noreferrer");
     } catch (error) {
       setStatusMessage(userMessage(error));
     } finally {
@@ -697,7 +703,7 @@ function CopyTradeContent() {
                   <span>{renderTxPhase(buy.phase) ?? statusMessage ?? "Processing copy trade…"}</span>
                   {"hash" in buy.phase && buy.phase.hash && (
                     <a
-                      href={explorerTx(buy.phase.hash)}
+                      href={explorerTx(buy.phase.hash) ?? undefined}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-primary hover:underline font-data-mono text-xs"

@@ -37,9 +37,6 @@ export const WALLET_FRAME_ORIGINS = [
   "https://suite.trezor.io",
 ];
 
-/** Remote illustrations that several pages render today. */
-const REMOTE_IMAGE_ORIGINS = ["https://lh3.googleusercontent.com"];
-
 /** `https://host[:port]`, `ws(s)://host[:port]` or null for an empty/invalid value. */
 export function originOf(url: string): string | null {
   if (!url || !url.trim()) return null;
@@ -92,7 +89,7 @@ export function buildCsp(inputs: CspInputs): string {
     ["script-src", script],
     ["style-src", style],
     ["style-src-attr", ["'unsafe-inline'"]],
-    ["img-src", unique(["'self'", "data:", "blob:", ...REMOTE_IMAGE_ORIGINS])],
+    ["img-src", unique(["'self'", "data:", "blob:"])],
     ["font-src", ["'self'"]],
     ["connect-src", connect],
     ["frame-src", WALLET_FRAME_ORIGINS],

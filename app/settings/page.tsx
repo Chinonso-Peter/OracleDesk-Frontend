@@ -11,8 +11,8 @@ import { UsdcInput } from "@/components/ui/usdc-input";
 import { NETWORK_LABEL } from "@/lib/stellar/config";
 import { shortAddress } from "@/lib/stellar/units";
 
-function SettingsSection({ title, icon, children }: { title: string; icon: string; children: React.ReactNode }) {
-  return <section className="rounded-lg border border-outline-variant bg-surface-container-lowest p-6"><h2 className="mb-6 flex items-center gap-2 font-headline-sm text-headline-sm"><span className="material-symbols-outlined text-primary">{icon}</span>{title}</h2>{children}</section>;
+function SettingsSection({ title, icon, children }: { title: string; icon: IconName; children: React.ReactNode }) {
+  return <section className="rounded-lg border border-outline-variant bg-surface-container-lowest p-6"><h2 className="mb-6 flex items-center gap-2 font-headline-sm text-headline-sm"><Icon name={icon} className="text-primary" />{title}</h2>{children}</section>;
 }
 
 const notificationRows = [
@@ -29,6 +29,8 @@ export default function SettingsPage() {
   const [daily, setDaily] = useState("");
   const [perTrace, setPerTrace] = useState("");
   const [message, setMessage] = useState<string | null>(null);
+  // Sync the form with the fetched allowance once; the effect mirrors external server state.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { if (allowance.data) { setDaily(formatUsdc(apiNumberToRaw(allowance.data.dailyLimit).raw)); setPerTrace(formatUsdc(apiNumberToRaw(allowance.data.perTraceLimit).raw)); } }, [allowance.data]);
   const dailyRaw = tryParseUsdc(daily);
   const perTraceRaw = tryParseUsdc(perTrace);

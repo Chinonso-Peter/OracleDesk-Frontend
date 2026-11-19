@@ -1,4 +1,5 @@
 import { StrKey } from "@stellar/stellar-sdk";
+import { parseAccount, parseContract, parseTxHash } from "../validation/ids";
 import deployments from "./generated/deployments.testnet.json";
 import {
   DEFAULT_IPFS_GATEWAY,
@@ -186,6 +187,15 @@ export const STELLAR_NETWORK_ID: "stellar:testnet" | "stellar:pubnet" =
   NETWORK_PASSPHRASE === TESTNET_PASSPHRASE ? "stellar:testnet" : "stellar:pubnet";
 export const WALLETCONNECT_CHAIN = STELLAR_NETWORK_ID;
 
-export const explorerTx = (hash: string) => `${EXPLORER_URL}/tx/${hash}`;
-export const explorerAccount = (address: string) =>
-  `${EXPLORER_URL}/${address.startsWith("C") ? "contract" : "account"}/${address}`;
+/** Explorer URL for a transaction hash, or null when the hash is not a 32-byte hex value. */
+export const explorerTx = (hash: string): string | null => {
+  const parsed = parseTxHash(hash);
+  return parsed ? `${EXPLORER_URL}/tx/${parsed}` : null;
+};
+
+/** Explorer URL for a G… account or C… contract, or null for any other string. */
+export const explorerAccount = (address: string): string | null => {
+  const parsed = parseAccount(address) ?? parseContract(address);
+  if (!parsed) return null;
+  return `${EXPLORER_URL}/${parsed.startsWith("C") ? "contract" : "account"}/${parsed}`;
+};

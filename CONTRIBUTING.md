@@ -35,11 +35,32 @@ invalid value fails the build with the full list of problems. See
 npm run check:bindings   # generated contract code matches the submodule
 npm run check:env        # .env.example documents every NEXT_PUBLIC_* the code reads
 npm run check:api-errors # API error codes match docs/api.md
+npm run check:sdk        # root SDK, wallet kit range and bindings agree on one major
 npm run typecheck
 npm run lint
 npm test
 npm run build
+npm run check:origins    # no unknown third-party origins in the build
+npm run scan:secrets     # no secrets or unlisted NEXT_PUBLIC_* names in the build
 ```
+
+## Dependencies
+
+- Add dependencies with an exact version (`.npmrc` sets `save-exact=true`)
+  and justify the package and its install scripts in the PR.
+- Lifecycle scripts are disabled (`ignore-scripts=true` in `.npmrc`). A
+  package that genuinely needs one must be added to `allowedInstallScripts`
+  in `package.json` with a one-line reason; CI runs only those with
+  `npm run install:allowed-scripts`.
+- `@creit.tech/stellar-wallets-kit` stays pinned to 2.5.0 and
+  `@stellar/stellar-sdk` stays on the same major as the generated bindings.
+  `npm run check:sdk` fails when they drift; do not bump across majors
+  without regenerating the bindings.
+- Dependency review runs on PRs and fails on new high/critical advisories.
+  `ALLOWED_GHSAS` is the reviewed repository-variable escape hatch; Dependabot
+  ignores are the update escape hatch (see `.github/dependabot.yml`).
+- Reviewed registry-install exception: `sharp` (Next.js image optimization).
+  Nothing else may run an install script without a matching PR reason.
 
 `npm run e2e:testnet` is an optional, read-only check against a running
 backend and live testnet; see the header of `e2e/testnet.e2e.test.ts`.

@@ -128,9 +128,9 @@ const ReasoningCard = ({ trace, disableEntrance = true }: ReasoningCardProps) =>
 
       <div className="p-6 bg-surface border-t border-outline-variant flex flex-wrap gap-4 items-center justify-between">
         <div className="flex gap-2">
-          <Link href={`/reasoning/verify?traceId=${id}`} className="px-4 py-2 bg-surface-container-low border border-outline text-on-surface rounded font-label-caps text-label-caps hover:bg-surface-variant transition-all">Verify</Link>
+          <Link href={`/reasoning/verify?traceId=${encodeURIComponent(id)}`} className="px-4 py-2 bg-surface-container-low border border-outline text-on-surface rounded font-label-caps text-label-caps hover:bg-surface-variant transition-all">Verify</Link>
           <Link
-            href={`/copy-trade?traceId=${id}&marketId=${marketId}`}
+            href={`/copy-trade?traceId=${encodeURIComponent(id)}&marketId=${encodeURIComponent(marketId)}`}
             className="px-4 py-2 bg-primary-container text-white rounded font-label-caps text-label-caps hover:opacity-90 active:opacity-80 transition-all"
           >
             Copy Trade
@@ -142,7 +142,7 @@ const ReasoningCard = ({ trace, disableEntrance = true }: ReasoningCardProps) =>
             View Agent Profile
           </Link>
         </div>
-        <Link href={`/premium/trace?traceId=${id}`} className="flex items-center gap-2 text-primary font-bold font-label-caps text-label-caps border border-primary px-4 py-2 rounded hover:bg-primary-fixed-dim/10">
+        <Link href={`/premium/trace?traceId=${encodeURIComponent(id)}`} className="flex items-center gap-2 text-primary font-bold font-label-caps text-label-caps border border-primary px-4 py-2 rounded hover:bg-primary-fixed-dim/10">
           <Icon name="lock_open" />
           Unlock Premium Trace
         </Link>
