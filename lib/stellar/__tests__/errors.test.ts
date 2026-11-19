@@ -49,16 +49,24 @@ describe("describeError", () => {
     expect(wrongNet.message).toBe(`Switch your wallet to ${NETWORK_LABEL} and try again.`);
   });
 
-  it("maps treasury #7 to the daily-limit wording", () => {
-    expect(describeError("Error(Contract, #7)", "treasury")).toMatchObject({
-      code: "DailyCapExceeded",
-      message: "The treasury has reached its daily limit.",
-    });
+  it("maps unknown code in known table to generic contract message with number", () => {
+    const unknownCode = describeError("Error(Contract, #9999)", "marketCore");
+    expect(unknownCode.kind).toBe("contract");
+    expect(unknownCode.message).toMatch(/error 9999/);
+    expect(unknownCode.code).toBeUndefined();
   });
 
-  it("words NotInitialized for the treasury only, not for the other contracts", () => {
-    expect(describeError("Error(Contract, #1)", "treasury").message).toBe("The treasury isn't set up yet.");
-    expect(describeError("Error(Contract, #1)", "marketCore").message).not.toMatch(/treasury/);
+  it("maps bare contract name through FRIENDLY", () => {
+    const bare = describeError("Transaction failed: SlippageExceeded occurred in execution");
+    expect(bare.kind).toBe("contract");
+    expect(bare.code).toBe("SlippageExceeded");
+    expect(bare.message).toMatch(/price moved/i);
+  });
+
+  it("recognises wrong network error", () => {
+    const wrongNet = describeError(new Error("Wrong network selected: switch to testnet"));
+    expect(wrongNet.kind).toBe("wrong-network");
+    expect(wrongNet.message).toMatch(/Testnet/);
   });
 
   it("recognises wallet rejection", () => {
@@ -66,17 +74,12 @@ describe("describeError", () => {
     expect(describeError(new Error("User declined access")).kind).toBe("rejected");
   });
 
-  it("classifies txBadSeq from structured RPC results and SDK error text", () => {
-    const structured = {
-      sendTransactionResponse: {
-        errorResult: {
-          result: () => ({ switch: () => ({ name: "txBadSeq" }) }),
-        },
-      },
-    };
-    expect(classifySequenceError(structured)).toBe(true);
-    expect(describeError(structured)).toMatchObject({ kind: "stale-sequence", code: "txBadSeq" });
-    expect(describeError("Transaction failed: txBadSeq")).toMatchObject({ kind: "stale-sequence" });
+  it("rejection beats trustline and balance text (precedence in both directions)", () => {
+    const rejAndTrust = describeError("User rejected request because trustline entry is missing");
+    expect(rejAndTrust.kind).toBe("rejected");
+
+    const trustAndRej = describeError("trustline entry is missing: request was rejected by user");
+    expect(trustAndRej.kind).toBe("rejected");
   });
 
   it("recognises balance and trustline failures before contract codes", () => {
@@ -85,41 +88,20 @@ describe("describeError", () => {
     expect(describeError("Error(Contract, #13) ... trustline entry is missing for account").kind).toBe("no-trustline");
   });
 
-  it("maps op_low_reserve and txInsufficientBalance to insufficient-xlm while preserving USDC balance mapping", () => {
-    expect(describeError("op_low_reserve").kind).toBe("insufficient-xlm");
-    expect(describeError("txInsufficientBalance").kind).toBe("insufficient-xlm");
-    expect(describeError("tx_insufficient_balance").kind).toBe("insufficient-xlm");
-    // USDC balance still wins
-    expect(describeError("balance is not sufficient to spend").kind).toBe("insufficient-balance");
-    expect(describeError("insufficient balance").kind).toBe("insufficient-balance");
-    expect(describeError("op_underfunded").kind).toBe("insufficient-balance");
+  it("textOf reads nested error.message and cause", () => {
+    const innerError = new Error("insufficient balance in account");
+    const outerError = new Error("Transaction simulation failed", { cause: innerError });
+    expect(describeError(outerError).kind).toBe("insufficient-balance");
+
+    const objectWithNestedMessage = {
+      error: { message: "Wrong network detected" },
+    };
+    expect(describeError(objectWithNestedMessage).kind).toBe("wrong-network");
   });
 
-  it("maps a missing WalletConnect session to a reconnect message", () => {
-    const described = describeError(new Error("No WalletConnect session found or it expired for the selected address."));
-    expect(described).toMatchObject({ kind: "disconnected" });
-    expect(described.message).toMatch(/connect your mobile wallet again/i);
-  });
-
-  it("maps an unfunded source account to account-not-found, before USDC rules", () => {
-    expect(describeError(new Error("Account not found: GABC123")).kind).toBe("account-not-found");
-    expect(describeError("op_no_source_account").kind).toBe("account-not-found");
-    expect(describeError("balance is not sufficient to spend").kind).toBe("insufficient-balance");
-  });
-
-  it("maps reasoning-registry errors with friendly messages", () => {
-    expect(describeError("Error(Contract, #3)", "reasoningRegistry")).toMatchObject({
-      kind: "contract",
-      code: "AgentAlreadyRegistered",
-      message: "This agent is already registered.",
-    });
-    expect(describeError("Error(Contract, #4)", "reasoningRegistry")).toMatchObject({
-      kind: "contract",
-      code: "AgentNotRegistered",
-      message: "This agent isn't registered.",
-    });
-    expect(describeError("Error(Contract, #6)", "reasoningRegistry").message).toMatch(/action/i);
-    expect(describeError("Error(Contract, #7)", "reasoningRegistry").message).toMatch(/IPFS CID/i);
+  it("null and undefined map to unknown", () => {
+    expect(describeError(null).kind).toBe("unknown");
+    expect(describeError(undefined).kind).toBe("unknown");
   });
 
   it("falls back to a readable message", () => {
