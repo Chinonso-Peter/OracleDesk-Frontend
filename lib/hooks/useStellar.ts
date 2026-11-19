@@ -5,10 +5,11 @@ import type { AssembledTransaction } from "@stellar/stellar-sdk/contract";
 import { useWallet } from "@/lib/contexts/WalletContext";
 import { marketCore, reasoningRegistry, token, Outcomes, type OutcomeTag, type Signer } from "@/lib/stellar/clients";
 import { describeError, UserFacingError, type ContractName } from "@/lib/stellar/errors";
-import { collateralOutForShares, priceYesBps } from "@/lib/stellar/generated/fpmm";
+import { priceYesBps } from "@/lib/stellar/generated/fpmm";
 import type { Market as OnChainMarket, Position } from "@/lib/stellar/generated/market-core";
 import { fetchAndVerifyTrace, type TraceCheck } from "@/lib/stellar/trace";
-import { maxIn, minOut } from "@/lib/stellar/units";
+import { planSell } from "@/lib/stellar/trade-plan";
+import { minOut } from "@/lib/stellar/units";
 
 /** Query keys all start with "stellar" so a disconnect can drop them in one go. */
 export const stellarKeys = {
@@ -269,24 +270,30 @@ export function useSell() {
       const signer = guard();
       const id = toId(marketId);
       const { market } = await fetchOnChainMarket(id);
-      const [rSold, rOther] = outcome === "Yes" ? [market.reserve_yes, market.reserve_no] : [market.reserve_no, market.reserve_yes];
-      let collateralOut: bigint;
+      let plan: { collateralOut: bigint; maxSharesIn: bigint };
       try {
-        collateralOut = collateralOutForShares(rSold, rOther, shares, BigInt(market.fee_bps));
+        plan = planSell(
+          {
+            reserveYes: market.reserve_yes,
+            reserveNo: market.reserve_no,
+            feeBps: BigInt(market.fee_bps),
+          },
+          outcome,
+          shares,
+          slippageBps
+        );
       } catch {
         throw new UserFacingError({ kind: "contract", message: "There isn't enough liquidity to sell that many shares." });
       }
-      // +1 covers the off-chain estimate's rounding; slippage covers price moves.
-      const maxSharesIn = maxIn(shares, slippageBps) + 1n;
       const tx = await marketCore(signer).sell({
         trader: signer.publicKey,
         market_id: id,
         outcome: Outcomes[outcome],
-        collateral_out: collateralOut,
-        max_shares_in: maxSharesIn,
+        collateral_out: plan.collateralOut,
+        max_shares_in: plan.maxSharesIn,
       });
       const { value, txHash } = await send<bigint>(tx);
-      return { sharesSold: value, collateralOut, maxSharesIn, txHash, holder: signer.publicKey };
+      return { sharesSold: value, collateralOut: plan.collateralOut, maxSharesIn: plan.maxSharesIn, txHash, holder: signer.publicKey };
     },
     onSuccess: (d, v) => invalidate(String(v.marketId), d.holder),
   });

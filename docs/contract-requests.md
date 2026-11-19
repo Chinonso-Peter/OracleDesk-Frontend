@@ -47,3 +47,32 @@ the commitment hash has to rebuild the XDR by hand. A no-op view function
 that takes a `ResolutionSpec`, or a `spec_hash(spec) -> BytesN<32>` view,
 would put the type in the spec and let clients ask the contract for the
 hash instead of re-implementing it.
+
+
+## 5. `grossForShares` in FPMM can round up, causing `calcSell` to require more shares than requested
+
+In `agents/core/fpmm.ts` (and `contracts/market-core/src/math.rs`), `grossForShares` computes the gross complete sets to burn for a desired `sharesIn`:
+
+```ts
+const root = isqrt(disc);
+const gross = (b - root) / 2n;
+```
+
+Because `root = isqrt(disc) = floor(sqrt(disc))`, subtracting `root` computes `b - floor(sqrt) = ceil(b - sqrt)`. The subsequent integer division by 2 can result in `ceil(exactRoot)` rather than `floor(exactRoot)`.
+When this estimated `gross` is converted to `collateralOut` and passed to `calcSell` (or on-chain `sell`), `calcSell` computes `sharesIn` which can exceed the requested `sharesIn` by 1 to 3 base units (especially in skewed markets where $r_{sold} > r_{other}$).
+Because the frontend pads `max_shares_in` by `maxIn(shares, slippageBps) + 1n`, at 0 slippage `max_shares_in = shares + 1n`. When `calcSell.sharesIn == shares + 2n`, on-chain `sell` reverts with `SlippageExceeded` or `InsufficientShares`.
+
+### Counterexample
+- Reserves: `rSold = 1000000000n`, `rOther = 555451858n`, `feeBps = 0n`
+- `sharesIn = 55n`
+- `collateralOutForShares` returns `20n`
+- `calcSell(1000000000n, 555451858n, 20n, 0n)` produces `sharesIn = 57n`
+- Difference: $57 - 55 = 2$ base units ($> +1$ padding)
+
+### Replay Command
+```bash
+stellar contract invoke --id $MARKET_CORE --network localnet -- quote_sell --market_id <id> --outcome '"No"' --collateral_out 20
+```
+
+### Proposed Fix
+Ensure `grossForShares` computes a true floor, e.g. using `ceil_isqrt` or checking `calcSell(rSold, rOther, gross, feeBps).sharesIn <= sharesIn` and decrementing `gross` if it overshoots.
