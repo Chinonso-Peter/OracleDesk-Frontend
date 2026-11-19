@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNetworkMutation as useMutation } from "@/lib/query/useNetworkMutation";
-import { recheckRpcAfterSimulation } from "@/lib/stellar/rpc-network-guard";
 import { isWalletCreator, settlementOf } from "@/lib/stellar/lp";
 import type { ViewedAddress } from "@/lib/stellar/identity";
 import type { ContractKey } from "@/lib/stellar/contract-check";
@@ -21,7 +20,7 @@ import { maxIn, minOut } from "@/lib/stellar/units";
 import { CONTRACTS, NETWORK_LABEL, NETWORK_PASSPHRASE } from "@/lib/stellar/config";
 import { DEBUG_ENABLED } from "@/lib/diagnostics/flags";
 import { recordSimulation } from "@/lib/diagnostics/events";
-import { currentRpcUrl, rpcPool, rpcServer, withPinnedRpc } from "@/lib/stellar/clients";
+import { rpcServer, withPinnedRpc } from "@/lib/stellar/clients";
 import { getTrustlineState, enableUsdcTrustline, usdcClassicAsset, type TrustlineState } from "@/lib/stellar/trustline";
 import { read, send, simulated } from "@/lib/stellar/tx";
 import { simulatedWithLedger, submit } from "@/lib/stellar/typed-call";
@@ -62,68 +61,11 @@ import { useUpdatePending } from "@/lib/pwa/update-context";
 import { useWalletAddress, useWalletNetwork, useWalletSigner } from "@/lib/stellar/WalletProvider";
 import { TxLifecycle } from "@/lib/stellar/tx-lifecycle";
 
-/** Query keys all start with "stellar" so a disconnect can drop them in one go. */
-export const stellarKeys = {
-  marketCount: ["stellar", "marketCount"] as const,
-  traceCount: ["stellar", "traceCount"] as const,
-  config: ["stellar", "config"] as const,
-  ledgerNow: ["stellar", "ledgerNow"] as const,
-  market: (id: string) => ["stellar", "market", id] as const,
-  markets: (limit = 20) => ["stellar", "markets", limit] as const,
-  position: (id: string, holder: string) => ["stellar", "position", id, holder] as const,
-  myPositions: (holder: string, totalMarkets: string) =>
-    ["stellar", "myPositions", holder, totalMarkets] as const,
-  balance: (owner: string) => ["stellar", "usdcBalance", owner] as const,
-  trustline: (owner: string) => ["stellar", "usdcTrustline", owner] as const,
-  account: (addr: string) => ["stellar", "account", addr] as const,
-  rpcNetwork: ["stellar", "rpcNetwork"] as const,
-  quoteBuy: (id: string, outcome: OutcomeTag, amount: string) => ["stellar", "quoteBuy", id, outcome, amount] as const,
-  exactBuy: (id: string, outcome: OutcomeTag, target: string) => ["stellar", "exactBuy", id, outcome, target] as const,
-  trace: (id: string) => ["stellar", "trace", id] as const,
-};
+export { stellarKeys } from "@/lib/stellar/hooks/keys";
+import { stellarKeys } from "@/lib/stellar/hooks/keys";
+import { measured, simRecord } from "@/lib/stellar/hooks/telemetry";
 
 const toId = (id: bigint | string | number) => BigInt(id);
-
-/**
- * Builds (and so simulates) a read against the pool's current endpoint, and
- * records latency, success and the simulated ledger into the RPC pool (and
- * the debug ring buffer when enabled). Recording never throws into the caller.
- */
-async function measured<Tx extends AssembledTransaction<unknown>>(method: string, build: () => Promise<Tx>, contract: ContractName | "usdc" = "marketCore"): Promise<Tx> {
-  const url = currentRpcUrl();
-  const t0 = Date.now();
-  try {
-    const tx = await build();
-    await recheckRpcAfterSimulation();
-    const sim = tx.simulation as { latestLedger?: number; error?: string } | undefined;
-    try {
-      rpcPool()?.record(url, { ms: Date.now() - t0, ok: true, latestLedger: sim?.latestLedger });
-      if (DEBUG_ENABLED) recordSimulation(simRecord(contract, method, tx));
-    } catch { /* telemetry only */ }
-    return tx;
-  } catch (err) {
-    try {
-      const status = /\b429\b|rate.?limit/i.test(String((err as Error)?.message ?? err)) ? 429 : undefined;
-      rpcPool()?.record(url, { ms: Date.now() - t0, ok: false, status });
-      if (DEBUG_ENABLED) recordSimulation({ at: Date.now(), contract, method, error: describeError(err).message });
-    } catch { /* telemetry only */ }
-    throw err;
-  }
-}
-
-function simRecord(contract: ContractName | "usdc", method: string, tx: AssembledTransaction<unknown>) {
-  const sim = tx.simulation as
-    | { latestLedger?: number; minResourceFee?: string; error?: string; transactionData?: { build?: () => { resources(): { footprint(): { readOnly(): unknown[]; readWrite(): unknown[] } } } } }
-    | undefined;
-  let readEntries: number | undefined;
-  let writeEntries: number | undefined;
-  try {
-    const fp = sim?.transactionData?.build?.().resources().footprint();
-    readEntries = fp?.readOnly().length;
-    writeEntries = fp?.readWrite().length;
-  } catch { /* shape differs between success/restore/error simulations */ }
-  return { at: Date.now(), contract, method, latestLedger: sim?.latestLedger, readEntries, writeEntries, minResourceFee: sim?.minResourceFee, error: sim?.error };
-}
 
 async function trustlineFor(address: string): Promise<TrustlineState> {
   return getTrustlineState(address, await usdcClassicAsset());
