@@ -13,6 +13,7 @@ import { RpcDegradedBanner } from "@/components/debug/RpcPanel";
 import { NetworkConsistencyBanner } from "@/components/layout/NetworkConsistencyBanner";
 import { BuildIdentityBanner } from "@/components/layout/BuildIdentityBanner";
 import { CopyTradeReconciler } from "@/components/copy-trade/CopyTradeReconciler";
+import { ViewedAddressProvider } from "@/lib/hooks/useViewedAddress";
 import { WebVitals } from "@/app/web-vitals";
 import { ErrorReportingInit } from "@/components/observability/ErrorReportingInit";
 import { ConsentBanner } from "@/components/consent-banner";
@@ -70,6 +71,7 @@ export default function RootLayout({
         <BuildIdentityBanner />
         <PwaRegistrar>
           <WalletProvider>
+            <ViewedAddressProvider>
             <CopyTradeReconciler />
             <ErrorReportingInit />
             <ConsentBanner />

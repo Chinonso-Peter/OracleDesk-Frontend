@@ -175,7 +175,7 @@ export function TxToastContainer() {
                   Details
                 </Link>
                 <a
-                  href={explorerTx(tx.hash)}
+                  href={explorerTx(tx.hash) ?? undefined}
                   target="_blank"
                   rel="noreferrer"
                   className="text-on-surface-variant hover:text-on-surface hover:underline"

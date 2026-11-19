@@ -16,6 +16,11 @@ npm run dev
 
 Forgot `--recurse-submodules`? Run `git submodule update --init`.
 
+Production builds require `NEXT_PUBLIC_API_URL` (no remote fallback); it must
+end with `/api/v1`. Local `.env.local` values are validated at startup, and an
+invalid value fails the build with the full list of problems. See
+[docs/security.md](docs/security.md) for the Content-Security-Policy rollout.
+
 ## Branches and commits
 
 - Branch names: `feat/…`, `fix/…`, `docs/…`, `chore/…`, `test/…`.
@@ -28,11 +33,34 @@ Forgot `--recurse-submodules`? Run `git submodule update --init`.
 
 ```bash
 npm run check:bindings   # generated contract code matches the submodule
+npm run check:env        # .env.example documents every NEXT_PUBLIC_* the code reads
+npm run check:api-errors # API error codes match docs/api.md
+npm run check:sdk        # root SDK, wallet kit range and bindings agree on one major
 npm run typecheck
 npm run lint
 npm test
 npm run build
+npm run check:origins    # no unknown third-party origins in the build
+npm run scan:secrets     # no secrets or unlisted NEXT_PUBLIC_* names in the build
 ```
+
+## Dependencies
+
+- Add dependencies with an exact version (`.npmrc` sets `save-exact=true`)
+  and justify the package and its install scripts in the PR.
+- Lifecycle scripts are disabled (`ignore-scripts=true` in `.npmrc`). A
+  package that genuinely needs one must be added to `allowedInstallScripts`
+  in `package.json` with a one-line reason; CI runs only those with
+  `npm run install:allowed-scripts`.
+- `@creit.tech/stellar-wallets-kit` stays pinned to 2.5.0 and
+  `@stellar/stellar-sdk` stays on the same major as the generated bindings.
+  `npm run check:sdk` fails when they drift; do not bump across majors
+  without regenerating the bindings.
+- Dependency review runs on PRs and fails on new high/critical advisories.
+  `ALLOWED_GHSAS` is the reviewed repository-variable escape hatch; Dependabot
+  ignores are the update escape hatch (see `.github/dependabot.yml`).
+- Reviewed registry-install exception: `sharp` (Next.js image optimization).
+  Nothing else may run an install script without a matching PR reason.
 
 `npm run e2e:testnet` is an optional, read-only check against a running
 backend and live testnet; see the header of `e2e/testnet.e2e.test.ts`.
@@ -235,8 +263,21 @@ When the contracts repository changes:
 
 ### Clearing CI spec-diff failures
 
-- **Uncovered Contract Errors**: If a new contract error code was added without a friendly user-facing message, add an entry describing it to `FRIENDLY` in `lib/stellar/errors.ts` (or add it to `UNFRIENDLY_ALLOWLIST` with justification if it is internal/admin-only).
+- **Uncovered Contract Errors**: If a new contract error code was added without a user-facing message, add an entry to `lib/i18n/messages/en.json` under `errors.contract.<contractName>.<ErrorName>`. Run `npm test` to verify catalog coverage.
 - **Breaking Call-Site References**: If a contract function was removed or its signature changed, update the calling code in `lib/`, `app/`, `components/`, or `e2e/` so no dead or mismatched invocations remain.
 - **Renumbered Error Codes**: Renumbering existing error codes breaks client-side error mapping and is rejected. Coordinate with contract maintainers to deprecate rather than renumber codes.
 - **Event Changes**: Changes to `Trade` or `TracePublished` events flag a requirement for backend indexer review.
+
+## Error Code Taxonomy & Adding Error Codes
+
+All errors in OracleDesk use a stable, typed taxonomy with localized messages in `lib/i18n/messages/en.json`:
+- **Contract errors**: Defined by generated bindings (`market-core`, `treasury`, `resolver`, `reasoning-registry`). To add a message for a new contract error, add `errors.contract.<contractName>.<ErrorName>` to `lib/i18n/messages/en.json`.
+- **Backend API errors**: Documented in `docs/api.md`. To add a new backend error code:
+  1. Document it in `docs/api.md` with its HTTP status (e.g., `400 INVALID_FOO`).
+  2. Add it to `API_ERROR_CODES` in `lib/errors/codes.ts`.
+  3. Add a plain-language, user-facing message to `errors.api.<CODE>` in `lib/i18n/messages/en.json`.
+  4. Run `npm run check:api-errors` and `npm test` to ensure CI checks pass.
+- **Client/Wallet errors**: Defined in `DESCRIBED_ERROR_KINDS` in `lib/errors/codes.ts` with catalog entries under `errors.kind.*`.
+- **Displaying in UI**: Always render errors via `userMessage(err)` from `lib/errors/display.ts` instead of raw `err.message`.
+
 

@@ -3,7 +3,8 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { clearAuthSession, getStoredSessionWallet, signInWithWallet } from "@/lib/api/auth";
+import { clearAuthSession, getStoredSessionWallet, signInWithWallet, getSession, logout, migrateLegacySession } from "@/lib/api/auth";
+import { SESSION_MODE } from "@/lib/api/client";
 import { broadcastWalletDisconnect, createCrossTabSync } from "@/lib/api/cross-tab-sync";
 import { safeReturnTo } from "@/lib/navigation";
 import { NETWORK_PASSPHRASE } from "./config";
@@ -236,7 +237,10 @@ export function WalletProvider({ children, kitLoader = loadStellarWalletsKit, rp
         },
         loadKit: kitLoader,
         storedSessionWallet: getStoredSessionWallet,
-        clearBackendSession: clearAuthSession,
+        clearBackendSession: () => {
+          if (SESSION_MODE === "cookie") void logout().catch(() => {});
+          else clearAuthSession();
+        },
         signIn: async (address, sign, isCurrent) => {
           track("signin_started", {});
           try {
@@ -300,6 +304,20 @@ export function WalletProvider({ children, kitLoader = loadStellarWalletsKit, rp
   // Starts the kit, restores a session the kit persisted (never redirects or
   // prompts), and tears the kit subscriptions down on unmount.
   useEffect(() => interpreter.start(), [interpreter]);
+
+  // In cookie mode the server is the source of truth for the session wallet:
+  // migrate a legacy localStorage token once, then ask GET /auth/session.
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      if (SESSION_MODE !== "cookie") return;
+      await migrateLegacySession().catch(() => undefined);
+      const session = await getSession().catch(() => null);
+      if (!live) return;
+      interpreter.send({ type: "SESSION_SYNCED", wallet: session?.walletAddress ?? null });
+    })();
+    return () => { live = false; };
+  }, [interpreter]);
 
   // Changes made in another tab (disconnect, account switch, login) reach this tab.
   useEffect(() => {

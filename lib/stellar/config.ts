@@ -1,11 +1,25 @@
 import { StrKey } from "@stellar/stellar-sdk";
+import { parseAccount, parseContract, parseTxHash } from "../validation/ids";
 import deployments from "./generated/deployments.testnet.json";
-import { CONTRACT_MANIFEST } from "./generated/contract-manifest";
+import {
+  DEFAULT_IPFS_GATEWAY,
+  DEFAULT_IPFS_MAX_TRACE_BYTES,
+  MAX_IPFS_GATEWAYS,
+  TESTNET_PASSPHRASE,
+  formatProblems,
+  parseGateways,
+  validateConfig,
+} from "../config/validate";
+import type { RawConfig, ValidConfig } from "../config/validate";
 
 /**
  * Network and contract configuration. Contract ids default to the synced
  * deployments file (lib/stellar/generated/, see scripts/sync-bindings.mjs);
  * each can be overridden with a NEXT_PUBLIC_* variable.
+ *
+ * Every value is validated by lib/config/validate.ts before this module
+ * exports anything, so a malformed value fails the build with a full list of
+ * problems instead of producing opaque simulation errors at runtime.
  *
  * Next.js only inlines NEXT_PUBLIC_* values referenced literally, so each one
  * is spelled out below.
@@ -17,38 +31,73 @@ export type ConfigSource = "env" | "fallback";
 const sources: Record<string, ConfigSource> = {};
 export const CONFIG_SOURCES: Readonly<Record<string, ConfigSource>> = sources;
 
+const used = (value: string | undefined) => Boolean(value && value.trim());
+
 const env = (value: string | undefined, fallback: string, name?: string) => {
-  const used = Boolean(value && value.trim());
-  if (name) sources[name] = used ? "env" : "fallback";
-  return used ? (value as string).trim() : fallback;
+  if (name) sources[name] = used(value) ? "env" : "fallback";
+  return used(value) ? (value as string).trim() : fallback;
 };
 
-export const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
+export { TESTNET_PASSPHRASE, MAX_IPFS_GATEWAYS, DEFAULT_IPFS_GATEWAY, parseGateways };
+export { DEFAULT_IPFS_MAX_TRACE_BYTES };
 
-export const NETWORK_PASSPHRASE = env(process.env.NEXT_PUBLIC_STELLAR_NETWORK_PASSPHRASE, TESTNET_PASSPHRASE, "NETWORK_PASSPHRASE");
-export const NETWORK_LABEL = NETWORK_PASSPHRASE === TESTNET_PASSPHRASE ? "Stellar Testnet" : "Stellar";
-const dedupe = (urls: string[]) => [...new Set(urls)];
+const nodeEnv: RawConfig["nodeEnv"] =
+  process.env.NODE_ENV === "production" ? "production" : process.env.NODE_ENV === "test" ? "test" : "development";
 
-/**
- * Soroban RPC endpoints. NEXT_PUBLIC_STELLAR_RPC_URL stays the first/primary
- * entry; NEXT_PUBLIC_STELLAR_RPC_URLS (comma-separated) adds failover
- * endpoints. See lib/stellar/rpc-pool.ts for selection and pinning.
- */
-export const RPC_URLS: readonly string[] = dedupe([
-  env(process.env.NEXT_PUBLIC_STELLAR_RPC_URL, "https://soroban-testnet.stellar.org", "RPC_URL"),
-  ...(process.env.NEXT_PUBLIC_STELLAR_RPC_URLS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
-]);
-sources.RPC_URLS = process.env.NEXT_PUBLIC_STELLAR_RPC_URLS?.trim() ? "env" : "fallback";
-export const RPC_URL = RPC_URLS[0]; // unchanged export for existing callers
-export const EXPLORER_URL = env(process.env.NEXT_PUBLIC_STELLAR_EXPLORER_URL, "https://stellar.expert/explorer/testnet", "EXPLORER_URL");
-
-export const CONTRACTS = {
+// Literal references kept so Next can inline them into the browser bundle.
+const rawContracts = {
   marketCore: env(process.env.NEXT_PUBLIC_MARKET_CORE_CONTRACT_ID, deployments.contracts.market_core, "CONTRACTS.marketCore"),
   treasury: env(process.env.NEXT_PUBLIC_TREASURY_CONTRACT_ID, deployments.contracts.treasury, "CONTRACTS.treasury"),
   resolver: env(process.env.NEXT_PUBLIC_RESOLVER_CONTRACT_ID, deployments.contracts.resolver, "CONTRACTS.resolver"),
   reasoningRegistry: env(process.env.NEXT_PUBLIC_REASONING_REGISTRY_CONTRACT_ID, deployments.contracts.reasoning_registry, "CONTRACTS.reasoningRegistry"),
   usdc: env(process.env.NEXT_PUBLIC_USDC_CONTRACT_ID, deployments.contracts.usdc, "CONTRACTS.usdc"),
-} as const;
+};
+
+const raw: RawConfig = {
+  apiUrl: process.env.NEXT_PUBLIC_API_URL,
+  passphrase: process.env.NEXT_PUBLIC_STELLAR_NETWORK_PASSPHRASE,
+  rpcUrl: process.env.NEXT_PUBLIC_STELLAR_RPC_URL,
+  rpcUrls: process.env.NEXT_PUBLIC_STELLAR_RPC_URLS,
+  explorerUrl: process.env.NEXT_PUBLIC_STELLAR_EXPLORER_URL,
+  contracts: rawContracts,
+  paymentsRecipient: env(process.env.NEXT_PUBLIC_PAYMENTS_RECIPIENT, rawContracts.treasury, "PAYMENTS_RECIPIENT"),
+  adminAddresses: process.env.NEXT_PUBLIC_ADMIN_ADDRESSES,
+  ipfsGateway: process.env.NEXT_PUBLIC_IPFS_GATEWAY_URL,
+  x402Url: process.env.NEXT_PUBLIC_X402_URL,
+  dailyPassPriceUsdc: process.env.NEXT_PUBLIC_DAILY_PASS_PRICE_USDC,
+  nodeEnv,
+};
+
+if (used(process.env.NEXT_PUBLIC_API_URL)) sources.API_URL = "env";
+if (used(process.env.NEXT_PUBLIC_IPFS_GATEWAY_URL)) sources.IPFS_GATEWAY = "env";
+if (used(process.env.NEXT_PUBLIC_IPFS_MAX_TRACE_BYTES)) sources.IPFS_MAX_TRACE_BYTES = "env";
+sources.RPC_URL = used(process.env.NEXT_PUBLIC_STELLAR_RPC_URL) ? "env" : "fallback";
+sources.RPC_URLS = used(process.env.NEXT_PUBLIC_STELLAR_RPC_URLS) ? "env" : "fallback";
+sources.ADMIN_ADDRESSES = used(process.env.NEXT_PUBLIC_ADMIN_ADDRESSES) ? "env" : "fallback";
+
+const result = validateConfig(raw);
+if (!result.ok) {
+  throw new Error(formatProblems(result.problems));
+}
+if (result.warnings.length) {
+  for (const warning of result.warnings) {
+    console.warn(`[config] ${warning.key} ${warning.value} ${warning.message}`);
+  }
+}
+
+const config: ValidConfig = result.config;
+
+/** Backend API base URL, validated (production builds require it explicitly). */
+export const API_URL = config.apiUrl;
+export const NETWORK_PASSPHRASE = config.passphrase;
+export const NETWORK_LABEL = NETWORK_PASSPHRASE === TESTNET_PASSPHRASE ? "Stellar Testnet" : "Stellar";
+
+/** Soroban RPC endpoints. The first entry is the primary; the rest are failover. */
+export const RPC_URLS: readonly string[] = [config.rpcUrl, ...config.rpcUrls];
+export const RPC_URL = RPC_URLS[0]; // unchanged export for existing callers
+export const EXPLORER_URL = config.explorerUrl;
+
+export const CONTRACTS = config.contracts;
 
 /**
  * Expected USDC asset identifier (CODE:ISSUER). Defaults to USDC:deployer on testnet.
@@ -59,13 +108,12 @@ export const USDC_ASSET = env(
   "USDC_ASSET"
 );
 
-
 /**
  * Recipient of premium payments. Must match the backend's PAYMENTS_RECIPIENT
  * or the backend will reject the payment. Defaults to the treasury, like the
  * backend (see docs/api.md for why that is a product decision).
  */
-export const PAYMENTS_RECIPIENT = env(process.env.NEXT_PUBLIC_PAYMENTS_RECIPIENT, CONTRACTS.treasury, "PAYMENTS_RECIPIENT");
+export const PAYMENTS_RECIPIENT = config.paymentsRecipient;
 
 /* ------------------------------------------------------------------ *
  * Contract identities (issue #122)
@@ -188,11 +236,7 @@ export const BUILD_IDENTITY: { canonical: boolean; overridden: IdentityKey[]; ma
  * rights itself (ADMIN_ADDRESSES). Matched exactly, because Stellar
  * addresses are uppercase and case-sensitive.
  */
-export const ADMIN_ADDRESSES: readonly string[] = (process.env.NEXT_PUBLIC_ADMIN_ADDRESSES ?? "")
-  .split(",")
-  .map((a) => a.trim())
-  .filter(Boolean);
-sources.ADMIN_ADDRESSES = ADMIN_ADDRESSES.length ? "env" : "fallback";
+export const ADMIN_ADDRESSES: readonly string[] = config.adminAddresses;
 
 export const isAdminAddress = (address: string | null | undefined) =>
   Boolean(address) && ADMIN_ADDRESSES.includes(address as string);
@@ -229,52 +273,22 @@ export const DIAGNOSTICS_TOLERANCE_BPS = (() => {
   return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 100;
 })();
 
-export const DEFAULT_IPFS_GATEWAY = "https://ipfs.io/ipfs";
-export const MAX_IPFS_GATEWAYS = 5;
-export const DEFAULT_IPFS_MAX_TRACE_BYTES = 1024 * 1024;
-
-/**
- * Parses a comma-separated gateway pool. Only https URLs are kept (plain http
- * only for localhost, for local testing). Entries are de-duplicated, trailing
- * slashes removed, and the pool is capped at MAX_IPFS_GATEWAYS. Returns an
- * empty list when nothing valid is left, so the caller can fall back.
- */
-export function parseGateways(raw: string | undefined): string[] {
-  const gateways: string[] = [];
-  for (const entry of (raw ?? "").split(",").map((s) => s.trim()).filter(Boolean)) {
-    let url: URL;
-    try {
-      url = new URL(entry);
-    } catch {
-      continue;
-    }
-    const localhost = url.hostname === "localhost" || url.hostname === "127.0.0.1";
-    if (url.protocol !== "https:" && !(url.protocol === "http:" && localhost)) continue;
-    const normalized = url.toString().replace(/\/+$/, "");
-    if (!gateways.includes(normalized)) gateways.push(normalized);
-    if (gateways.length === MAX_IPFS_GATEWAYS) break;
-  }
-  return gateways;
-}
-
-const ipfsGatewayEnv = process.env.NEXT_PUBLIC_IPFS_GATEWAY_URL;
-sources.IPFS_GATEWAY = ipfsGatewayEnv?.trim() ? "env" : "fallback";
-const parsedGateways = parseGateways(ipfsGatewayEnv);
-if (ipfsGatewayEnv?.trim() && parsedGateways.length === 0) {
-  console.warn(`NEXT_PUBLIC_IPFS_GATEWAY_URL has no usable https gateway; using ${DEFAULT_IPFS_GATEWAY}.`);
-}
 /** Gateways tried for trace content, in priority order. Use https (or http://localhost). */
-export const IPFS_GATEWAYS: readonly string[] = parsedGateways.length ? parsedGateways : [DEFAULT_IPFS_GATEWAY];
+export const IPFS_GATEWAYS: readonly string[] = config.ipfsGateways;
 export const IPFS_GATEWAY = IPFS_GATEWAYS[0]; // unchanged export for existing callers
 
 const ipfsMaxBytesEnv = Number(process.env.NEXT_PUBLIC_IPFS_MAX_TRACE_BYTES);
 /** Largest trace body read from a gateway. Larger responses are abandoned while streaming. */
 export const IPFS_MAX_TRACE_BYTES =
   Number.isSafeInteger(ipfsMaxBytesEnv) && ipfsMaxBytesEnv > 0 ? ipfsMaxBytesEnv : DEFAULT_IPFS_MAX_TRACE_BYTES;
-sources.IPFS_MAX_TRACE_BYTES = process.env.NEXT_PUBLIC_IPFS_MAX_TRACE_BYTES?.trim() ? "env" : "fallback";
 
 /** The contracts repo's x402 trace service (per-trace unlocks). Empty if not deployed. */
-export const X402_URL = env(process.env.NEXT_PUBLIC_X402_URL, "", "X402_URL");
+export const X402_URL = config.x402Url;
+
+/** Daily-pass price in USDC base units, validated at startup. */
+export const DAILY_PASS_PRICE_RAW: bigint = config.dailyPassPriceRaw;
+/** Daily-pass price as the configured decimal string. */
+export const DAILY_PASS_PRICE_USDC: string = config.dailyPassPriceUsdc;
 
 /**
  * WalletConnect (mobile wallets such as LOBSTR and Freighter Mobile). Off
@@ -289,6 +303,15 @@ export const STELLAR_NETWORK_ID: "stellar:testnet" | "stellar:pubnet" =
   NETWORK_PASSPHRASE === TESTNET_PASSPHRASE ? "stellar:testnet" : "stellar:pubnet";
 export const WALLETCONNECT_CHAIN = STELLAR_NETWORK_ID;
 
-export const explorerTx = (hash: string) => `${EXPLORER_URL}/tx/${hash}`;
-export const explorerAccount = (address: string) =>
-  `${EXPLORER_URL}/${address.startsWith("C") ? "contract" : "account"}/${address}`;
+/** Explorer URL for a transaction hash, or null when the hash is not a 32-byte hex value. */
+export const explorerTx = (hash: string): string | null => {
+  const parsed = parseTxHash(hash);
+  return parsed ? `${EXPLORER_URL}/tx/${parsed}` : null;
+};
+
+/** Explorer URL for a G… account or C… contract, or null for any other string. */
+export const explorerAccount = (address: string): string | null => {
+  const parsed = parseAccount(address) ?? parseContract(address);
+  if (!parsed) return null;
+  return `${EXPLORER_URL}/${parsed.startsWith("C") ? "contract" : "account"}/${parsed}`;
+};
