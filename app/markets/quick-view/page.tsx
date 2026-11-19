@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { useMarket, useMarketQuestionIntegrity } from "@/lib/hooks/useMarkets";
 import { QuestionVerificationBadge } from "@/components/question-verification-badge";
+import { SafeText } from "@/components/safe-text";
 import { ResolverStatusPanel } from "@/components/resolver-status-panel";
 import { getMarketByOnChainId, getResolution } from "@/lib/api/markets";
 import { ApiError } from "@/lib/api/client";
@@ -255,18 +256,19 @@ function MarketQuickViewContent() {
               <div className="flex items-start justify-between gap-3">
                 <DialogTitle asChild>
                   <h2 className="font-headline-sm text-headline-sm text-on-surface leading-tight">
-                    {title}
+                    <SafeText text={title} />
                   </h2>
                 </DialogTitle>
                 {questionIntegrity.data && (
                   <QuestionVerificationBadge
                     status={questionIntegrity.data.status}
                     result={questionIntegrity.data}
+                    displayedText={title}
                   />
                 )}
               </div>
               {questionIntegrity.data?.status === "mismatch" && (
-                <QuestionVerificationBadge status="mismatch" result={questionIntegrity.data} />
+                <QuestionVerificationBadge status="mismatch" result={questionIntegrity.data} displayedText={title} />
               )}
             </div>
 

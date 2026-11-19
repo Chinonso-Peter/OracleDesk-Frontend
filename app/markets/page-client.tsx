@@ -15,6 +15,7 @@ import { BACKEND_CATEGORIES, BACKEND_CATEGORY_LABELS } from "@/lib/stellar/categ
 import { NETWORK_LABEL } from "@/lib/stellar/config";
 import { VirtualList } from "@/components/ui/virtual-list";
 import { QuestionVerificationBadge } from "@/components/question-verification-badge";
+import { SafeText } from "@/components/safe-text";
 import { bytesToHex } from "@/lib/stellar/typed-call";
 import { userMessage } from "@/lib/errors/display";
 
@@ -156,6 +157,7 @@ const MarketCard = ({ href, category, onChainMarketId, reasoningTraces, expiry, 
               <QuestionVerificationBadge
                 status={questionIntegrity.data.status}
                 result={questionIntegrity.data}
+                displayedText={title}
                 compact={true}
               />
             )}
@@ -165,13 +167,13 @@ const MarketCard = ({ href, category, onChainMarketId, reasoningTraces, expiry, 
 
         {questionIntegrity.data?.status === "mismatch" && (
           <div className="mb-3">
-            <QuestionVerificationBadge status="mismatch" result={questionIntegrity.data} />
+            <QuestionVerificationBadge status="mismatch" result={questionIntegrity.data} displayedText={title} />
           </div>
         )}
 
         <Link href={href} className="block">
           <h3 className="font-headline-sm text-headline-sm text-on-surface mb-6 group-hover:text-primary transition-colors line-clamp-3">
-            {title}
+            <SafeText text={title} />
           </h3>
         </Link>
         <div className="space-y-4">
