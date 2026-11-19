@@ -1,11 +1,50 @@
 "use client";
+import { Icon } from "@/components/ui/icon";
 
 import React from "react";
 import Link from "next/link";
+import { RequireWallet } from "@/components/require-wallet";
 import { useWallet } from "@/lib/contexts/WalletContext";
 import { useMarkets } from "@/lib/hooks/useMarkets";
 import { usePlatformStats } from "@/lib/hooks/usePortfolio";
+import { floatUsdcToRaw, formatUsdcDisplay } from "@/lib/format/money";
 import { isAdminAddress } from "@/lib/stellar/config";
+import { DiagnosticsPanel } from "@/components/admin/diagnostics-panel";
+import { JobStatusChip } from "@/components/admin/job-status-chip";
+import { useAdminJobs } from "@/lib/admin/job-store";
+import { formatLocalTime, shortJobId } from "@/lib/admin/job-events";
+
+/** Last five runs this browser started, from the job store (no polling here). */
+function RecentGenerationRuns({ address }: { address: string | null }) {
+  const { jobs } = useAdminJobs(address);
+  const recent = jobs.slice(0, 5);
+  return (
+    <div className="bg-white border border-outline-variant rounded-xl overflow-hidden shadow-sm">
+      <div className="p-6 border-b border-outline-variant flex justify-between items-center">
+        <h3 className="font-headline-sm text-headline-sm">Recent generation runs</h3>
+        <Link href="/admin/create" className="text-primary font-label-caps text-label-caps hover:underline">
+          Track runs
+        </Link>
+      </div>
+      {recent.length === 0 ? (
+        <div className="p-8 text-center text-on-surface-variant italic">No runs started from this browser.</div>
+      ) : (
+        <ul className="divide-y divide-outline-variant">
+          {recent.map((job) => (
+            <li key={job.jobId} className="flex items-center justify-between gap-4 p-4">
+              <div className="flex items-center gap-3 min-w-0">
+                <JobStatusChip status={job.lastStatus} />
+                <span className="font-data-mono text-data-mono" title={job.jobId}>{shortJobId(job.jobId)}</span>
+                {job.question && <span className="truncate text-on-surface-variant">{job.question}</span>}
+              </div>
+              <span className="text-[11px] text-on-surface-variant shrink-0">{formatLocalTime(job.startedAt)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 const AdminStat = ({ label, value, change }: { label: string, value: string, change?: string }) => (
   <div className="bg-white p-6 border border-outline-variant rounded-lg flex flex-col justify-between hover:shadow-md transition-all">
@@ -19,7 +58,7 @@ const AdminStat = ({ label, value, change }: { label: string, value: string, cha
   </div>
 );
 
-const MarketItem = ({ title, status, volume }: { title: string, status: string, volume: string }) => (
+const MarketItem = ({ title, status, volume, volumeLabel = "Liquidity" }: { title: string, status: string, volume: string, volumeLabel?: string }) => (
   <div className="flex items-center justify-between p-4 hover:bg-surface-container-low transition-colors border-b border-outline-variant last:border-0">
     <div>
       <p className="font-body-md font-bold text-on-surface">{title}</p>
@@ -30,41 +69,27 @@ const MarketItem = ({ title, status, volume }: { title: string, status: string, 
     </div>
     <div className="text-right">
       <p className="font-data-mono text-data-mono text-on-surface">{volume}</p>
-      <p className="text-[11px] text-on-surface-variant uppercase font-label-caps text-[10px]">Liquidity</p>
+      <p className="text-[11px] text-on-surface-variant uppercase font-label-caps text-[10px]">{volumeLabel}</p>
     </div>
   </div>
 );
 
 export default function AdminDashboard() {
-  const { isConnected, address, openModal } = useWallet();
+  return (
+    <RequireWallet
+      title="Restricted Access"
+      description="The Admin Control Center requires a secure wallet connection for institutional authentication."
+    >
+      <AdminContent />
+    </RequireWallet>
+  );
+}
+
+function AdminContent() {
+  const { address, disconnect, openModal } = useWallet();
   const { data: marketsData, isLoading } = useMarkets({ limit: 10 });
   const { data: stats } = usePlatformStats();
   const markets = marketsData?.markets ?? [];
-
-  if (!isConnected) {
-    return (
-      <main className="flex-grow flex items-center justify-center p-gutter">
-        <div className="max-w-md w-full text-center space-y-6 bg-white p-10 rounded-xl border border-outline-variant shadow-sm">
-          <div className="w-20 h-20 bg-primary-container text-primary rounded-full flex items-center justify-center mx-auto">
-            <span className="material-symbols-outlined text-4xl">lock</span>
-          </div>
-          <div className="space-y-2">
-            <h2 className="font-headline-md text-headline-md">Restricted Access</h2>
-            <p className="text-on-surface-variant">
-              The Admin Control Center requires a secure wallet connection for institutional authentication.
-            </p>
-          </div>
-          <button
-            onClick={openModal}
-            className="w-full bg-primary text-primary-foreground py-4 rounded-lg font-label-caps text-label-caps hover:brightness-110 transition-all flex items-center justify-center gap-2 shadow-lg cursor-pointer"
-          >
-            <span className="material-symbols-outlined">account_balance_wallet</span>
-            CONNECT WALLET TO ACCESS
-          </button>
-        </div>
-      </main>
-    );
-  }
 
   // UI gate only. The backend checks ADMIN_ADDRESSES itself on every admin
   // request; hiding this page does not protect anything.
@@ -75,7 +100,7 @@ export default function AdminDashboard() {
       <main className="flex-grow flex items-center justify-center p-gutter">
         <div className="max-w-md w-full text-center space-y-6 bg-white p-10 rounded-xl border border-outline-variant shadow-sm">
           <div className="w-20 h-20 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto">
-            <span className="material-symbols-outlined text-4xl">block</span>
+            <Icon name="block" className="text-4xl" />
           </div>
           <div className="space-y-2">
             <h2 className="font-headline-md text-headline-md">Access Denied</h2>
@@ -87,10 +112,11 @@ export default function AdminDashboard() {
             </p>
           </div>
           <button
-            onClick={openModal}
+            // Disconnect first so the kit's picker lets the user choose another account.
+            onClick={() => void disconnect().then(() => openModal())}
             className="w-full bg-outline text-on-outline py-4 rounded-lg font-label-caps text-label-caps hover:brightness-90 transition-all flex items-center justify-center gap-2 shadow-lg cursor-pointer"
           >
-            <span className="material-symbols-outlined">swap_horiz</span>
+            <Icon name="swap_horiz" />
             SWITCH WALLET
           </button>
         </div>
@@ -111,19 +137,37 @@ export default function AdminDashboard() {
           href="/admin/create" 
           className="bg-primary text-primary-foreground px-6 py-4 rounded-lg font-label-caps text-label-caps flex items-center gap-2 hover:brightness-110 active:scale-[0.98] transition-all shadow-lg"
         >
-          <span className="material-symbols-outlined">add_circle</span>
+          <Icon name="add_circle" />
           CREATE NEW MARKET
+        </Link>
+        <Link
+          href="/admin/agents"
+          className="border border-outline text-on-surface px-6 py-4 rounded-lg font-label-caps text-label-caps flex items-center gap-2 hover:bg-surface-container-low transition-all"
+        >
+          <Icon name="smart_toy" />
+          MANAGE AGENTS
         </Link>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <AdminStat label="Copy-trade volume" value={stats ? `$${stats.totalCopyVolume.toLocaleString()}` : "—"} />
-        <AdminStat label="Markets" value={stats ? String(stats.marketCount) : "—"} change={stats ? `${stats.onChainMarketCount} on-chain` : undefined} />
+        <AdminStat
+          label="Copy-trade volume"
+          value={
+            stats
+              ? (() => {
+                  const raw = floatUsdcToRaw(stats.totalCopyVolume);
+                  return raw !== null ? formatUsdcDisplay(raw) : "—";
+                })()
+              : "—"
+          }
+          change={stats ? "backend record" : undefined}
+        />
+        <AdminStat label="Markets (backend db)" value={stats ? String(stats.marketCount) : "—"} change={stats ? `${stats.onChainMarketCount} on-chain ids` : undefined} />
         <AdminStat label="Users" value={stats ? String(stats.subscriberCount) : "—"} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        <div className="lg:col-span-8 space-y-6">
+        <div className="lg:col-span-12 space-y-6">
           <div className="bg-white border border-outline-variant rounded-xl overflow-hidden shadow-sm">
             <div className="p-6 border-b border-outline-variant flex justify-between items-center">
               <h3 className="font-headline-sm text-headline-sm">Active Markets</h3>
@@ -133,48 +177,30 @@ export default function AdminDashboard() {
               {isLoading ? (
                 <div className="p-8 text-center text-on-surface-variant animate-pulse">Loading markets...</div>
               ) : markets.length > 0 ? (
-                markets.map((m) => (
-                  <MarketItem 
-                    key={m.id}
-                    title={m.question} 
-                    status={m.status === 'ACTIVE' ? 'Active' : m.status.charAt(0) + m.status.slice(1).toLowerCase()} 
-                    volume={`$${(m.totalLiquidity).toLocaleString()}`} 
-                  />
-                ))
+                markets.map((m) => {
+                  const hasSeed = Boolean(m.seedAmountRaw);
+                  const rawLiq = hasSeed ? BigInt(m.seedAmountRaw!) : floatUsdcToRaw(m.totalLiquidity);
+                  return (
+                    <MarketItem 
+                      key={m.id}
+                      title={m.question} 
+                      status={m.status === 'ACTIVE' ? 'Active' : m.status.charAt(0) + m.status.slice(1).toLowerCase()} 
+                      volume={rawLiq !== null ? formatUsdcDisplay(rawLiq) : "—"}
+                      volumeLabel={hasSeed ? "Liquidity (seed)" : "Liquidity (backend record)"}
+                    />
+                  );
+                })
               ) : (
                 <div className="p-8 text-center text-on-surface-variant italic">No markets found. Deploy one to get started.</div>
               )}
             </div>
           </div>
         </div>
-
-        <div className="lg:col-span-4 space-y-6">
-          <div className="bg-surface-container-highest border border-outline-variant p-6 rounded-xl space-y-4">
-            <h3 className="font-headline-sm text-headline-sm flex items-center gap-2">System Health <span className="text-[10px] font-label-caps uppercase px-1.5 py-0.5 rounded bg-surface-container text-on-surface-variant">Demo data</span></h3>
-            <div className="space-y-3">
-              <div className="flex justify-between items-center">
-                <span className="font-label-caps text-label-caps text-on-surface-variant">Oracle Latency</span>
-                <span className="font-data-mono text-secondary">14ms</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="font-label-caps text-label-caps text-on-surface-variant">Node Consensus</span>
-                <span className="font-data-mono text-secondary">100%</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="font-label-caps text-label-caps text-on-surface-variant">Queue Depth</span>
-                <span className="font-data-mono text-on-surface">0.02%</span>
-              </div>
-            </div>
-            <div className="pt-4">
-              <div className="h-1 bg-outline-variant rounded-full overflow-hidden">
-                <div className="h-full bg-secondary w-[99%]"></div>
-              </div>
-              <p className="text-[10px] text-on-surface-variant mt-2 font-label-caps">ALL SYSTEMS OPERATIONAL</p>
-            </div>
-          </div>
-
-        </div>
       </div>
+
+      <RecentGenerationRuns address={address} />
+
+      <DiagnosticsPanel />
     </main>
   );
 }

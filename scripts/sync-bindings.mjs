@@ -19,15 +19,7 @@ const SUBMODULE = join(ROOT, "contracts");
 const SOURCE = join(SUBMODULE, "oracledesk-stellar");
 const DEST = join(ROOT, "lib", "stellar", "generated");
 
-// [source path under oracledesk-stellar/, destination file name]
-const FILES = [
-  ["packages/bindings/market-core/src/index.ts", "market-core.ts"],
-  ["packages/bindings/treasury/src/index.ts", "treasury.ts"],
-  ["packages/bindings/reasoning-registry/src/index.ts", "reasoning-registry.ts"],
-  ["packages/bindings/resolver/src/index.ts", "resolver.ts"],
-  ["agents/core/fpmm.ts", "fpmm.ts"],
-  ["deployments/testnet.json", "deployments.testnet.json"],
-];
+import { FILES } from "./lib/files.mjs";
 
 const check = process.argv.includes("--check");
 
@@ -73,6 +65,28 @@ for (const [src, name] of FILES) {
   }
   writeFileSync(to, expected);
   console.log(`wrote       ${relative(ROOT, to)}`);
+}
+
+// Binding provenance the running app can report (debug panel / diagnostics).
+// Must match JSON.stringify(..., null, 2) + "\n" exactly so --check is stable.
+{
+  const to = join(DEST, "provenance.json");
+  const expected =
+    JSON.stringify(
+      { contractsCommit: commit, files: Object.fromEntries(FILES.map(([src, name]) => [name, `oracledesk-stellar/${src}`])) },
+      null,
+      2,
+    ) + "\n";
+  const current = existsSync(to) ? readFileSync(to, "utf8") : null;
+  if (current === expected) {
+    if (!check) console.log(`up to date  ${relative(ROOT, to)}`);
+  } else if (check) {
+    console.error(`stale       ${relative(ROOT, to)}`);
+    stale++;
+  } else {
+    writeFileSync(to, expected);
+    console.log(`wrote       ${relative(ROOT, to)}`);
+  }
 }
 
 if (check) {

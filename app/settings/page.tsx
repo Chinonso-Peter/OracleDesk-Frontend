@@ -1,205 +1,47 @@
 "use client";
+import { Icon, type IconName } from "@/components/ui/icon";
 
-import React, { useState } from "react";
-import Image from "next/image";
+import React, { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useWallet } from "@/lib/contexts/WalletContext";
+import { usePaymentEvents, useSetSpendingAllowance, useSpendingAllowance } from "@/lib/hooks/useTraces";
+import { apiNumberToRaw, computeTodayUsage, rawToApiNumber, validateAllowance } from "@/lib/format/allowance";
+import { formatUsdc, tryParseUsdc } from "@/lib/stellar/units";
+import { UsdcInput } from "@/components/ui/usdc-input";
+import { NETWORK_LABEL } from "@/lib/stellar/config";
+import { shortAddress } from "@/lib/stellar/units";
 
-const SettingsSection = ({ title, icon, children, className = "" }: { title: string; icon: string; children: React.ReactNode; className?: string }) => (
-  <section className={`bg-surface-container-lowest border border-outline-variant p-6 rounded-lg transition-all hover:shadow-sm ${className}`}>
-    <div className="flex justify-between items-center mb-6">
-      <h2 className="font-headline-sm text-headline-sm flex items-center gap-2">
-        <span className="material-symbols-outlined text-primary">{icon}</span>
-        {title}
-      </h2>
-    </div>
-    {children}
-  </section>
-);
+function SettingsSection({ title, icon, children }: { title: string; icon: string; children: React.ReactNode }) {
+  return <section className="rounded-lg border border-outline-variant bg-surface-container-lowest p-6"><h2 className="mb-6 flex items-center gap-2 font-headline-sm text-headline-sm"><span className="material-symbols-outlined text-primary">{icon}</span>{title}</h2>{children}</section>;
+}
 
-const ToggleSwitch = ({ checked, onChange, label, sublabel }: { checked: boolean; onChange: () => void; label: string; sublabel?: string }) => (
-  <div className="flex items-center justify-between py-2">
-    <div>
-      <p className="text-body-md font-bold text-on-surface">{label}</p>
-      {sublabel && <p className="text-[11px] text-on-surface-variant">{sublabel}</p>}
-    </div>
-    <label className="relative inline-flex items-center cursor-pointer">
-      <input type="checkbox" className="sr-only peer" checked={checked} onChange={onChange} />
-      <div className="w-11 h-6 bg-outline-variant rounded-full peer peer-focus:outline-none peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
-    </label>
-  </div>
-);
+const notificationRows = [
+  { key: "execution", label: "Trade confirmations", sublabel: "Submitted and confirmed fills." },
+  { key: "news", label: "Price and market updates", sublabel: "New reasoning traces or outcome changes." },
+  { key: "shifts", label: "Probability shifts", sublabel: "When a market moves more than 5%." },
+] as const;
 
 export default function SettingsPage() {
-  const [slippage, setSlippage] = useState("0.5%");
-  const [autoApprove, setAutoApprove] = useState(false);
-  const [notifications, setNotifications] = useState({
-    execution: true,
-    news: true,
-    shifts: false,
-  });
-
-  return (
-    <main className="flex-grow pt-8 pb-20 px-gutter max-w-container-max-width mx-auto w-full">
-      <header className="mb-10">
-        <h1 className="font-headline-md text-headline-md text-on-surface mb-2">User Settings</h1>
-        <p className="text-body-md text-on-surface-variant">Manage your institutional profile, trading logic, and security preferences.</p>
-      </header>
-
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-8">
-        {/* Left Column: Profile & Security */}
-        <div className="md:col-span-7 space-y-8">
-          {/* Profile Section */}
-          <SettingsSection title="Profile Details" icon="account_circle">
-            <div className="flex items-center gap-6 mb-8">
-              <div className="relative">
-                <div className="w-20 h-20 rounded-full border-2 border-surface-container-high overflow-hidden relative bg-surface-container">
-                  <img
-                    alt="Alexander Sterling"
-                    className="w-full h-full object-cover"
-                    src="https://lh3.googleusercontent.com/aida-public/AB6AXuCGWqFtKhDsbOybVPby4djFKeIipFfrrNReDwn9As0eMt_2-RKqMVPlLjCXzDO3H6phqsmKsaM8QYi82di3Kia1P76rZtY2Bl55_8bjXQsloMoK4cDAHIqBvLY085CKtsvBROUf36NmVUzYcD2fwGwPdSpllaw6OtlYEygqPrwRqNQoZiPV1i6776eiZqRcBAjA9HawkbylkNOVwwh4_wcQisTfOmPkSyVsYPYRvV94JSssSLrGQ6M8khwDlhf9Fut2BqGfHAuDkA"
-                  />
-                </div>
-                <button className="absolute bottom-0 right-0 bg-primary text-on-primary p-1 rounded-full border-2 border-surface hover:scale-110 transition-transform">
-                  <span className="material-symbols-outlined text-[16px]">edit</span>
-                </button>
-              </div>
-              <div>
-                <p className="font-headline-sm text-headline-sm text-on-surface">Alexander Sterling</p>
-                <p className="text-body-md text-on-surface-variant">Principal Analyst • Institutional Tier</p>
-              </div>
-              <button className="ml-auto text-primary font-label-caps text-label-caps border border-primary px-3 py-1 rounded hover:bg-primary hover:text-on-primary transition-all self-start md:self-center">
-                Edit
-              </button>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-              <div>
-                <label className="font-label-caps text-label-caps text-on-surface-variant block mb-1">Email Address</label>
-                <p className="font-body-md text-body-md text-on-surface">a.sterling@oracledesk.com</p>
-              </div>
-              <div>
-                <label className="font-label-caps text-label-caps text-on-surface-variant block mb-1">Affiliation</label>
-                <p className="font-body-md text-body-md text-on-surface">Aegis Capital Partners</p>
-              </div>
-            </div>
-          </SettingsSection>
-
-          {/* Wallet & Security Section */}
-          <SettingsSection title="Wallet & Security" icon="security">
-            <div className="space-y-6">
-              <div className="p-4 bg-surface-container-low border border-outline-variant rounded flex justify-between items-center">
-                <div className="flex items-center gap-3">
-                  <span className="material-symbols-outlined text-primary">account_balance_wallet</span>
-                  <div>
-                    <p className="font-label-caps text-label-caps text-on-surface-variant">Connected Wallet</p>
-                    <p className="font-data-mono text-data-mono text-on-surface">
-                      0x71C...4f92 <span className="ml-2 text-secondary text-[10px] bg-secondary-container px-2 py-0.5 rounded-full">ACTIVE</span>
-                    </p>
-                  </div>
-                </div>
-                <button className="text-error font-label-caps text-label-caps hover:underline active:opacity-70 transition-opacity">Disconnect</button>
-              </div>
-              <div>
-                <div className="flex justify-between items-center mb-3">
-                  <p className="font-label-caps text-label-caps text-on-surface-variant">API Access Keys</p>
-                  <button className="text-primary font-label-caps text-label-caps text-[11px] flex items-center gap-1 hover:brightness-90 transition-all">
-                    <span className="material-symbols-outlined text-[14px]">add</span>
-                    Generate New
-                  </button>
-                </div>
-                <div className="space-y-2">
-                  {["Trading_Bot_v1", "Analytics_Engine_Production"].map((key) => (
-                    <div key={key} className="flex justify-between items-center p-3 border border-outline-variant rounded text-on-surface hover:bg-surface transition-colors">
-                      <span className="font-data-mono text-data-mono">{key}</span>
-                      <button className="material-symbols-outlined text-on-surface-variant cursor-pointer hover:text-error transition-colors">delete</button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </SettingsSection>
-        </div>
-
-        {/* Right Column: Trading Logic & Preferences */}
-        <div className="md:col-span-5 space-y-8">
-          {/* Trading Logic Section */}
-          <section className="bg-primary-container text-white p-6 rounded-lg shadow-lg hover:shadow-xl transition-all">
-            <h2 className="font-headline-sm text-headline-sm flex items-center gap-2 mb-6">
-              <span className="material-symbols-outlined">settings_input_component</span>
-              Trading Logic
-            </h2>
-            <div className="space-y-6">
-              <div>
-                <label className="font-label-caps text-label-caps text-on-primary-container block mb-2">Default Slippage Tolerance</label>
-                <div className="grid grid-cols-4 gap-2">
-                  {["0.1%", "0.5%", "1.0%"].map((val) => (
-                    <button
-                      key={val}
-                      onClick={() => setSlippage(val)}
-                      className={`py-2 rounded font-data-mono text-data-mono transition-colors ${
-                        slippage === val ? "bg-on-primary-container text-primary-container font-bold" : "bg-primary border border-on-primary-container hover:bg-on-primary-container/20"
-                      }`}
-                    >
-                      {val}
-                    </button>
-                  ))}
-                  <input
-                    className="bg-transparent border border-on-primary-container rounded py-2 px-2 text-center text-data-mono placeholder:text-on-primary-container/50 focus:ring-1 focus:ring-white focus:outline-none"
-                    placeholder="Custom"
-                    type="text"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="font-label-caps text-label-caps text-on-primary-container block mb-2">Fee Priority Level</label>
-                <div className="relative">
-                  <select className="w-full bg-primary border border-on-primary-container rounded py-3 px-4 text-body-md focus:ring-1 focus:ring-white focus:outline-none appearance-none cursor-pointer">
-                    <option>Normal (Optimized Cost)</option>
-                    <option selected>High (Fast Execution)</option>
-                    <option>Frontrun (Immediate Settlement)</option>
-                  </select>
-                  <span className="material-symbols-outlined absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none opacity-50">expand_more</span>
-                </div>
-              </div>
-              <div className="pt-4 border-t border-on-primary-container/30">
-                <ToggleSwitch
-                  label="Auto-Approve Transactions"
-                  sublabel="Only for known market smart contracts."
-                  checked={autoApprove}
-                  onChange={() => setAutoApprove(!autoApprove)}
-                />
-              </div>
-            </div>
-          </section>
-
-          {/* Notifications Section */}
-          <SettingsSection title="Notifications" icon="notifications_active">
-            <div className="space-y-4">
-              <ToggleSwitch
-                label="Execution Alerts"
-                checked={notifications.execution}
-                onChange={() => setNotifications({ ...notifications, execution: !notifications.execution })}
-              />
-              <ToggleSwitch
-                label="Market News Insights"
-                checked={notifications.news}
-                onChange={() => setNotifications({ ...notifications, news: !notifications.news })}
-              />
-              <ToggleSwitch
-                label="Probability Shifts (>5%)"
-                checked={notifications.shifts}
-                onChange={() => setNotifications({ ...notifications, shifts: !notifications.shifts })}
-              />
-            </div>
-          </SettingsSection>
-
-          {/* AI Insights Prompt */}
-          <div className="bg-[#f0f9fa] p-4 rounded border border-primary/20 flex gap-4 items-start shadow-sm">
-            <span className="material-symbols-outlined text-primary mt-1">psychology</span>
-            <p className="text-body-md italic text-on-primary-container">
-              &quot;OracleDesk AI suggests your slippage is 0.2% higher than similar institutional profiles. Adjusting to 0.3% could lower your trading costs.&quot;
-            </p>
-          </div>
-        </div>
-      </div>
-    </main>
-  );
+  const wallet = useWallet();
+  const allowance = useSpendingAllowance();
+  const payments = usePaymentEvents();
+  const save = useSetSpendingAllowance();
+  const [daily, setDaily] = useState("");
+  const [perTrace, setPerTrace] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  useEffect(() => { if (allowance.data) { setDaily(formatUsdc(apiNumberToRaw(allowance.data.dailyLimit).raw)); setPerTrace(formatUsdc(apiNumberToRaw(allowance.data.perTraceLimit).raw)); } }, [allowance.data]);
+  const dailyRaw = tryParseUsdc(daily);
+  const perTraceRaw = tryParseUsdc(perTrace);
+  const errors = useMemo(() => validateAllowance(dailyRaw, perTraceRaw), [dailyRaw, perTraceRaw]);
+  const usage = computeTodayUsage(payments.data ?? []);
+  const usageLimit = dailyRaw ?? 0n;
+  const usagePercent = usageLimit > 0n ? Math.min(100, Number((usage * 100n) / usageLimit)) : 0;
+  async function submit() {
+    if (Object.keys(errors).length || dailyRaw === null || perTraceRaw === null) return;
+    const dailyApi = rawToApiNumber(dailyRaw); const perTraceApi = rawToApiNumber(perTraceRaw);
+    if (!dailyApi.ok || !perTraceApi.ok) return;
+    try { await save.mutateAsync({ dailyLimit: dailyApi.value, perTraceLimit: perTraceApi.value, currency: "USDC" }); setMessage("Your trace spending limits were saved."); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "Could not save your limits."); }
+  }
+  return <main className="mx-auto w-full max-w-container-max-width flex-grow px-gutter pb-20 pt-8"><header className="mb-10"><h1 className="mb-2 font-headline-md text-headline-md text-on-surface">Settings</h1><p className="text-body-md text-on-surface-variant">Control wallet-scoped preferences and trace spending limits.</p></header><div className="grid grid-cols-1 gap-8 md:grid-cols-12"><div className="space-y-8 md:col-span-7"><SettingsSection title="Wallet" icon="account_balance_wallet">{wallet.isConnected && wallet.address ? <div className="flex items-center justify-between rounded border border-outline-variant bg-surface-container-low p-4"><div><p className="text-xs text-on-surface-variant">Connected wallet</p><p className="font-data-mono">{shortAddress(wallet.address, 6, 6)} <span className="ml-2 text-xs text-secondary">{NETWORK_LABEL}</span></p></div><Link href="/portfolio/wallets" className="text-primary hover:underline">Manage</Link></div> : <button onClick={() => void wallet.openModal()} className="rounded bg-primary px-4 py-2 text-white">Connect wallet</button>}</SettingsSection><SettingsSection title="Trace spending limits" icon="payments">{!wallet.isConnected ? <p className="text-sm text-on-surface-variant">Connect your wallet to manage spending limits.</p> : !wallet.isAuthenticated ? <div><p className="mb-3 text-sm text-on-surface-variant">Sign in to view and change your limits.</p><button onClick={() => void wallet.ensureSession()} className="rounded bg-primary px-4 py-2 text-white">Sign in</button></div> : <div className="space-y-5"><p className="text-sm text-on-surface-variant">Payments are blocked until you set a positive daily and per-trace limit.</p><div className="grid gap-4 sm:grid-cols-2"><UsdcInput label="Daily limit (USDC)" value={daily} onValueChange={(_, text) => setDaily(text)} error={errors.daily} /><UsdcInput label="Per-trace limit (USDC)" value={perTrace} onValueChange={(_, text) => setPerTrace(text)} error={errors.perTrace} /></div><div><div className="mb-1 flex justify-between text-xs text-on-surface-variant"><span>Used today</span><span>{formatUsdc(usage)}{usageLimit ? ` of ${formatUsdc(usageLimit)} USDC` : " USDC"}</span></div><div className="h-2 overflow-hidden rounded bg-surface-container"><div className="h-full bg-primary" style={{ width: `${usagePercent}%` }} /></div></div><button disabled={save.isPending || Boolean(Object.keys(errors).length)} onClick={() => void submit()} className="rounded bg-primary px-5 py-2 text-white disabled:cursor-not-allowed disabled:opacity-50">{save.isPending ? "Saving…" : "Save limits"}</button>{message && <p aria-live="polite" className="text-sm text-on-surface-variant">{message}</p>}</div>}</SettingsSection></div><div className="space-y-8 md:col-span-5"><SettingsSection title="Trading defaults" icon="settings_input_component"><p className="text-sm text-on-surface-variant">Trading preference controls are coming soon.</p></SettingsSection></div></div></main>;
 }

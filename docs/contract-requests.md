@@ -48,31 +48,32 @@ that takes a `ResolutionSpec`, or a `spec_hash(spec) -> BytesN<32>` view,
 would put the type in the spec and let clients ask the contract for the
 hash instead of re-implementing it.
 
+## 5. Add a share-budget sell quote
 
-## 5. `grossForShares` in FPMM can round up, causing `calcSell` to require more shares than requested
+The frontend converts "sell N shares" into `collateral_out` by binary-searching
+the contract's integer-rounded `calc_sell` math, then confirms the result with
+`quote_sell`. A view such as `quote_sell_shares(market_id, outcome, shares) ->
+{ collateral_out, shares_in }` would provide the exact inversion on-chain and
+avoid repeated local work and quote simulations.
 
-In `agents/core/fpmm.ts` (and `contracts/market-core/src/math.rs`), `grossForShares` computes the gross complete sets to burn for a desired `sharesIn`:
+## 6. Expose treasury per-market exposure and the paused flag
 
-```ts
-const root = isqrt(disc);
-const gross = (b - root) / 2n;
-```
+The `/portfolio` risk panel reads `get_config`, `daily_usage` and
+`available_capital` from the treasury. Two facts it would also show are only
+reachable from raw storage today: how much of `max_market` a market has used
+(`DataKey::Market(u64)` → `MarketExposure { amount, open }`), and whether the
+treasury is paused. Read-only getters `market_exposure(market_id) ->
+MarketExposure` and `paused() -> bool` would let the frontend show both
+without reading storage keys that the contract may change.
 
-Because `root = isqrt(disc) = floor(sqrt(disc))`, subtracting `root` computes `b - floor(sqrt) = ceil(b - sqrt)`. The subsequent integer division by 2 can result in `ceil(exactRoot)` rather than `floor(exactRoot)`.
-When this estimated `gross` is converted to `collateralOut` and passed to `calcSell` (or on-chain `sell`), `calcSell` computes `sharesIn` which can exceed the requested `sharesIn` by 1 to 3 base units (especially in skewed markets where $r_{sold} > r_{other}$).
-Because the frontend pads `max_shares_in` by `maxIn(shares, slippageBps) + 1n`, at 0 slippage `max_shares_in = shares + 1n`. When `calcSell.sharesIn == shares + 2n`, on-chain `sell` reverts with `SlippageExceeded` or `InsufficientShares`.
+## 7. Merge complete sets (`merge` entrypoint)
 
-### Counterexample
-- Reserves: `rSold = 1000000000n`, `rOther = 555451858n`, `feeBps = 0n`
-- `sharesIn = 55n`
-- `collateralOutForShares` returns `20n`
-- `calcSell(1000000000n, 555451858n, 20n, 0n)` produces `sharesIn = 57n`
-- Difference: $57 - 55 = 2$ base units ($> +1$ padding)
-
-### Replay Command
-```bash
-stellar contract invoke --id $MARKET_CORE --network localnet -- quote_sell --market_id <id> --outcome '"No"' --collateral_out 20
-```
-
-### Proposed Fix
-Ensure `grossForShares` computes a true floor, e.g. using `ceil_isqrt` or checking `calcSell(rSold, rOther, gross, feeBps).sharesIn <= sharesIn` and decrementing `gross` if it overshoots.
+A holder who owns both `YES` and `NO` shares on an open market cannot merge
+`min(yes, no)` pairs back into `1` base unit of collateral per complete set.
+Instead, exiting both legs requires calling `sell` on one side and then `sell`
+on the other against the post-trade reserves (`lib/portfolio/valuation.ts`).
+Because each `sell` pays `fee_bps` into the pool and increases the FPMM
+constant product, sequential two-sided exits lose value to fees and curve
+rounding compared with a direct `merge(trader, market_id, sets)` entrypoint
+that burns `sets` of `YES` and `NO` from the trader's position and returns
+`sets` of collateral.

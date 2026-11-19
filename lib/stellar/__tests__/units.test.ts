@@ -61,6 +61,19 @@ describe("parseUsdc / formatUsdc", () => {
   });
 });
 
+describe("formatXlm", () => {
+  it("uses 7 decimals and stroops unit", () => {
+    expect(XLM_UNIT).toBe(10_000_000n);
+    expect(formatXlm(10_000_000n)).toBe("1");
+    expect(formatXlm(1n)).toBe("0.0000001");
+    expect(formatXlm(123_456n)).toBe("0.0123456");
+    expect(formatXlm(12_345_678_900_000n, { grouping: true })).toBe("1,234,567.89");
+    expect(formatXlm(99_981_000_000n, { grouping: true })).toBe("9,998.1");
+    expect(formatXlm(0n)).toBe("0");
+    expect(formatXlm(5_000_000n, { minDecimals: 2 })).toBe("0.50");
+  });
+});
+
 describe("slippage helpers round against the user", () => {
   it("minOut rounds down", () => {
     expect(minOut(10_000n, 100)).toBe(9_900n);
@@ -168,5 +181,56 @@ describe("property: units round trip (P8)", () => {
       ),
       { numRuns: 200 }
     );
+  });
+});
+
+describe("mulDivFloor / mulDivCeil", () => {
+  it("throws RangeError on negative operands or non-positive divisor", () => {
+    expect(() => mulDivFloor(-1n, 5n, 2n)).toThrow(RangeError);
+    expect(() => mulDivFloor(5n, -1n, 2n)).toThrow(RangeError);
+    expect(() => mulDivFloor(5n, 2n, 0n)).toThrow(RangeError);
+    expect(() => mulDivFloor(5n, 2n, -3n)).toThrow(RangeError);
+    expect(() => mulDivCeil(-1n, 5n, 2n)).toThrow(RangeError);
+    expect(() => mulDivCeil(5n, -1n, 2n)).toThrow(RangeError);
+    expect(() => mulDivCeil(5n, 2n, 0n)).toThrow(RangeError);
+    expect(() => mulDivCeil(5n, 2n, -3n)).toThrow(RangeError);
+  });
+
+  it("mulDivFloor/mulDivCeil match fpmm rounding on 10k random triples", () => {
+    let state = 0x9e3779b9;
+    const next = (max: bigint) => {
+      state = (state * 1_664_525 + 1_013_904_223) >>> 0;
+      return (BigInt(state) * max) / 4_294_967_296n;
+    };
+
+    for (let i = 0; i < 10_000; i++) {
+      const a = next(1_000_000_000_000n);
+      const b = next(1_000_000_000_000n);
+      const c = next(1_000_000_000_000n) + 1n;
+
+      const floor = mulDivFloor(a, b, c);
+      const ceil = mulDivCeil(a, b, c);
+      const product = a * b;
+
+      expect(floor * c).toBeLessThanOrEqual(product);
+      expect((floor + 1n) * c).toBeGreaterThan(product);
+      expect(ceil * c).toBeGreaterThanOrEqual(product);
+      if (ceil > 0n) {
+        expect((ceil - 1n) * c).toBeLessThan(product);
+      }
+      expect(ceil - floor).toBe(product % c === 0n ? 0n : 1n);
+
+      // Compare directly with fpmm's internal floor (priceYesBps) and ceil (calcBuy fee/newBought)
+      if (a + b > 0n) {
+        expect(mulDivFloor(b, FPMM_BPS, a + b)).toBe(priceYesBps(a, b));
+      }
+      if (a > 0n && b > 0n) {
+        const feeBps = (c % 1_000n) + 1n;
+        const collateralIn = (a % 1_000_000_000n) + 1_000n;
+        const quote = calcBuy(a, b, collateralIn, feeBps);
+        expect(mulDivCeil(collateralIn, feeBps, FPMM_BPS)).toBe(quote.fee);
+        expect(mulDivCeil(a, b, b + quote.net)).toBe(quote.newReserveBought);
+      }
+    }
   });
 });

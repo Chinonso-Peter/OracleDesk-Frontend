@@ -2,12 +2,52 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
+    branches: [main, develop]
 
 jobs:
   frontend:
     name: Typecheck, lint, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci --legacy-peer-deps
+
+      - name: Generated bindings match the contracts submodule
+        run: npm run check:bindings
+
+      - name: .env.example matches the variables the code reads
+        run: npm run check:env
+
+      - name: Single SDK copy and major alignment guard
+        run: npm run check:sdk
+
+      - name: Report contract interface changes
+        run: node scripts/spec-diff.mjs --base "origin/${{ github.base_ref || 'main' }}" --summary "$GITHUB_STEP_SUMMARY"
+
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+        env:
+          # Production builds require an explicit API URL (no remote fallback).
+          NEXT_PUBLIC_API_URL: https://oracledesk-backend.onrender.com/api/v1
+
+      - name: No production links to retired demo routes
+        run: node scripts/check-demo-links.mjs
+
+  perf:
+    name: Lighthouse CI & Performance Budgets
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,12 +59,20 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
-      - run: npm ci
+      - run: npm ci --legacy-peer-deps
 
-      - name: Generated bindings match the contracts submodule
-        run: npm run check:bindings
+      - name: Build production bundle
+        run: npm run build
+        env:
+          NEXT_PUBLIC_STELLAR_RPC_URL: http://localhost:8787/rpc
+          NEXT_PUBLIC_API_URL: http://localhost:8787
 
-      - run: npm run typecheck
-      - run: npm run lint
-      - run: npm test
-      - run: npm run build
+      - name: Run Lighthouse CI
+        run: npm run perf:lhci
+
+      - name: Upload Lighthouse reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lighthouse-reports
+          path: .lighthouseci/reports/

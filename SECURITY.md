@@ -27,6 +27,9 @@ In scope, for example:
 - Leaking a secret through a `NEXT_PUBLIC_*` variable (these are compiled
   into browser JavaScript).
 - Reusing a backend session for a different wallet.
+- Stealing a backend session from script-readable storage. The default cookie
+  mode keeps the JWT in an `HttpOnly` cookie; the bearer mode exists only for
+  cross-site deployments and stores the token in `localStorage`.
 
 Out of scope: the contracts (report to
 [OracleDesk-SmartContract](https://github.com/OracleDesk/OracleDesk-SmartContract)),

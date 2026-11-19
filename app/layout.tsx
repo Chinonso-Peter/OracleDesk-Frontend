@@ -1,25 +1,51 @@
-import type { Metadata } from "next";
-// import { Geist, Geist_Mono, Inter } from "next/font/google";
+import type { Metadata, Viewport } from "next";
+import { Geist, Geist_Mono, Inter } from "next/font/google";
 import Navbar from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
 import { WalletProvider } from "@/lib/contexts/WalletContext";
 import "./globals.css";
+import { RealtimeProvider } from "@/lib/realtime/RealtimeProvider";
+import { HealthProvider } from "@/lib/health/HealthProvider";
+import { InboxProvider } from "@/lib/notifications/InboxProvider";
+import { PwaRegistrar } from "@/components/pwa/pwa-registrar";
+import { DebugMount } from "@/components/debug/debug-mount";
+import { RpcDegradedBanner } from "@/components/debug/RpcPanel";
+import { NetworkConsistencyBanner } from "@/components/layout/NetworkConsistencyBanner";
+import { CopyTradeReconciler } from "@/components/copy-trade/CopyTradeReconciler";
+import { ViewedAddressProvider } from "@/lib/hooks/useViewedAddress";
+import { WebVitals } from "@/app/web-vitals";
 
-const geistSans = {
+const geistSans = Geist({
+  subsets: ["latin"],
   variable: "--font-geist-sans",
-};
+  display: "swap",
+});
 
-const geistMono = {
+const geistMono = Geist_Mono({
+  subsets: ["latin"],
   variable: "--font-geist-mono",
-};
+  display: "swap",
+});
 
-const inter = {
+const inter = Inter({
+  subsets: ["latin"],
   variable: "--font-inter",
-};
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "OracleDesk | Institutional-Grade AI Prediction Terminal",
   description: "The world's most accurate AI-driven prediction terminal.",
+  applicationName: "OracleDesk",
+  appleWebApp: { capable: true, title: "OracleDesk", statusBarStyle: "default" },
+  icons: {
+    icon: [{ url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" }],
+    apple: [{ url: "/icons/apple-touch-icon.png", sizes: "180x180" }],
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#004655",
 };
 
 export default function RootLayout({
@@ -32,18 +58,35 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} ${inter.variable} h-full antialiased`}
     >
-      <head>
-        <link
-          href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=block"
-          rel="stylesheet"
-        />
-      </head>
       <body className="min-h-full flex flex-col font-body-md text-on-surface">
-        <WalletProvider>
-          <Navbar />
-          {children}
-          <Footer />
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-primary focus:text-primary-foreground focus:rounded-md focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-primary-foreground font-label-caps"
+        >
+          Skip to main content
+        </a>
+        <PwaRegistrar>
+          <WalletProvider>
+            <ViewedAddressProvider>
+            <CopyTradeReconciler />
+            <RealtimeProvider>
+              <HealthProvider>
+                <InboxProvider>
+                  <Navbar />
+                  <NetworkConsistencyBanner />
+                  <RpcDegradedBanner />
+                  <div id="main-content" tabIndex={-1} className="flex-1 flex flex-col outline-none">
+                    {children}
+                  </div>
+                  <Footer />
+                  <DebugMount />
+                  <WebVitals />
+                </InboxProvider>
+              </HealthProvider>
+            </RealtimeProvider>
+          </ViewedAddressProvider>
         </WalletProvider>
+        </PwaRegistrar>
       </body>
     </html>
   );

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { describeError } from "../errors";
+import { xdr, type rpc } from "@stellar/stellar-sdk";
+import { classifySequenceError, describeError, describeSubmission } from "../errors";
 
 describe("describeError", () => {
   it("maps market-core contract errors by code", () => {
@@ -75,5 +76,108 @@ describe("describeError", () => {
   it("falls back to a readable message", () => {
     expect(describeError(new TypeError("Failed to fetch")).kind).toBe("network");
     expect(describeError(42).message).toMatch(/something went wrong/i);
+  });
+});
+
+describe("describeSubmission", () => {
+  it("maps TRY_AGAIN_LATER and DUPLICATE", () => {
+    const tryAgain = describeSubmission({
+      status: "TRY_AGAIN_LATER",
+      hash: "1234",
+      latestLedger: 10,
+      latestLedgerCloseTime: 100,
+    } as rpc.Api.SendTransactionResponse);
+    expect(tryAgain.kind).toBe("submission");
+    expect(tryAgain.submission).toBe("try-again-later");
+
+    const dup = describeSubmission({
+      status: "DUPLICATE",
+      hash: "1234",
+      latestLedger: 10,
+      latestLedgerCloseTime: 100,
+    } as rpc.Api.SendTransactionResponse);
+    expect(dup.kind).toBe("submission");
+    expect(dup.submission).toBe("duplicate");
+  });
+
+  it("maps multisig submission codes txBadAuth, txBadAuthExtra, txTooLate and txBadSeq", () => {
+    const makeError = (resultArm: () => xdr.TransactionResultResult) =>
+      ({
+        status: "ERROR",
+        hash: "1234",
+        latestLedger: 10,
+        latestLedgerCloseTime: 100,
+        errorResult: new xdr.TransactionResult({
+          feeCharged: xdr.Int64.fromString("100"),
+          result: resultArm(),
+          ext: new xdr.TransactionResultExt(0),
+        }),
+      }) as unknown as rpc.Api.SendTransactionResponse;
+
+    const badAuth = describeSubmission(makeError(() => xdr.TransactionResultResult.txBadAuth()));
+    expect(badAuth.resultCode).toBe("txBadAuth");
+    expect(badAuth.kind).toBe("bad-auth");
+    expect(badAuth.message).toMatch(/more signatures/i);
+
+    const badExtra = describeSubmission(makeError(() => xdr.TransactionResultResult.txBadAuthExtra()));
+    expect(badExtra.resultCode).toBe("txBadAuthExtra");
+    expect(badExtra.kind).toBe("bad-auth");
+    expect(badExtra.message).toMatch(/extra signatures/i);
+
+    const tooLate = describeSubmission(makeError(() => xdr.TransactionResultResult.txTooLate()));
+    expect(tooLate.resultCode).toBe("txTooLate");
+    expect(tooLate.message).toBe("This transaction expired before it was submitted. Prepare it again with a fresh quote.");
+
+    const badSeq = describeSubmission(makeError(() => xdr.TransactionResultResult.txBadSeq()));
+    expect(badSeq.resultCode).toBe("txBadSeq");
+    expect(badSeq.kind).toBe("stale-sequence");
+    expect(badSeq.message).toMatch(/sequence/i);
+
+    const lowFee = describeSubmission(makeError(() => xdr.TransactionResultResult.txInsufficientFee()));
+    expect(lowFee.resultCode).toBe("txInsufficientFee");
+
+    const noXlm = describeSubmission(makeError(() => xdr.TransactionResultResult.txInsufficientBalance()));
+    expect(noXlm.kind).toBe("insufficient-xlm");
+    expect(noXlm.resultCode).toBe("txInsufficientBalance");
+  });
+
+  it("maps tx_bad_auth, tx_bad_auth_extra, tx_too_late and tx_bad_seq text", () => {
+    expect(describeError("tx_bad_auth")).toMatchObject({ kind: "bad-auth", code: "tx_bad_auth" });
+    expect(describeError("Transaction failed: txBadAuth")).toMatchObject({ kind: "bad-auth" });
+    expect(describeError("tx_bad_auth_extra")).toMatchObject({ kind: "bad-auth", code: "tx_bad_auth_extra" });
+    expect(describeError("tx_too_late")).toMatchObject({
+      kind: "expired",
+      message: "This transaction expired before it was submitted. Prepare it again with a fresh quote.",
+    });
+    expect(describeError("tx_bad_seq")).toMatchObject({ kind: "stale-sequence" });
+  });
+
+  it("falls through to contract errors on txFailed", () => {
+    const failedContract = {
+      status: "ERROR",
+      hash: "1234",
+      latestLedger: 10,
+      latestLedgerCloseTime: 100,
+      errorResult: new xdr.TransactionResult({
+        feeCharged: xdr.Int64.fromString("100"),
+        result: xdr.TransactionResultResult.txFailed([]),
+        ext: new xdr.TransactionResultExt(0),
+      }),
+      message: "HostError: Error(Contract, #12)",
+    } as unknown as rpc.Api.SendTransactionResponse;
+
+    const result = describeSubmission(failedContract, "marketCore");
+    expect(result.code).toBe("SlippageExceeded");
+    expect(result.resultCode).toBe("txFailed");
+    expect(result.submission).toBe("rejected-by-network");
+  });
+});
+
+describe("describeError rate limiting", () => {
+  it("maps HTTP 429 to a busy-network message", () => {
+    const d = describeError(new Error("Request failed with status code 429"));
+    expect(d).toMatchObject({ kind: "network", code: "rate-limited" });
+    expect(d.message).toMatch(/busy right now/i);
+    expect(describeError("Too Many Requests").code).toBe("rate-limited");
   });
 });
