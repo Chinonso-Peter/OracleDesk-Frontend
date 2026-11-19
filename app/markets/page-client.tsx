@@ -125,13 +125,20 @@ const MarketCard = ({ href, category, onChainMarketId, reasoningTraces, expiry, 
   const aiStatus = latestTrace ? `${Math.abs(latestTrace.edge * 100).toFixed(1)}% EDGE` : "STABLE";
   const volume24h = chainStatusLabel(view);
 
+  const fromChain = Boolean(view?.market);
   const questionIntegrity = useMarketQuestionIntegrity({
     marketId,
     onChainMarketId,
     displayedQuestion: title,
-    metaUri: view?.market.meta_uri ?? metaUri,
-    questionHash: view?.market.question_hash ?? questionHash,
+    metaUri: view?.market.meta_uri ?? null,
+    questionHash: view?.market.question_hash ?? null,
+    hasChainRead: fromChain,
+    chainMarket: view?.market,
   });
+
+  const displayTitle = questionIntegrity.data?.status === "verified" && questionIntegrity.data.committedQuestion
+    ? questionIntegrity.data.committedQuestion
+    : title;
 
   const cardContent = (
     <>
@@ -171,7 +178,7 @@ const MarketCard = ({ href, category, onChainMarketId, reasoningTraces, expiry, 
 
         <Link href={href} className="block">
           <h3 className="font-headline-sm text-headline-sm text-on-surface mb-6 group-hover:text-primary transition-colors line-clamp-3">
-            {title}
+            {displayTitle}
           </h3>
         </Link>
         <div className="space-y-4">
