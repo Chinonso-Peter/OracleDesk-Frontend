@@ -8,6 +8,10 @@ import { AgentProfileCard } from "@/components/agent-profile-card";
 import { createEmptyProfile, buildAgentProfile } from "@/lib/services/agent-profile";
 import { listTraces } from "@/lib/api/traces";
 
+export function generateStaticParams() {
+  return [{ address: "fallback" }];
+}
+
 export default function AgentProfilePage() {
   const params = useParams();
   const agentAddress = decodeURIComponent(params.address as string);
