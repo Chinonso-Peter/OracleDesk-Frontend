@@ -16,6 +16,7 @@ import { NETWORK_LABEL } from "@/lib/stellar/config";
 import { VirtualList } from "@/components/ui/virtual-list";
 import { QuestionVerificationBadge } from "@/components/question-verification-badge";
 import { bytesToHex } from "@/lib/stellar/typed-call";
+import { userMessage } from "@/lib/errors/display";
 
 const SourceTag = ({ source }: { source: "chain" | "backend" }) => (
   <span
@@ -386,7 +387,7 @@ export default function MarketsPageClient() {
             <Icon name="error" className="text-error text-4xl mb-4" />
             <p className="text-on-surface-variant font-medium">Failed to load markets.</p>
             <p className="text-on-surface-variant/70 text-sm mt-2">
-              {error instanceof Error ? error.message : "Please check if the backend is running and accessible."}
+              {userMessage(error)}
             </p>
             {typeof navigator !== "undefined" && navigator.onLine === false && (
               <p className="text-on-surface-variant text-sm mt-2">You appear to be offline. Reconnect, then retry.</p>

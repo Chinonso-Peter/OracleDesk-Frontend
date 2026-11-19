@@ -1,5 +1,7 @@
 import type { UserScope } from "@/lib/query/scope";
 import { API_URL } from "@/lib/stellar/config";
+import { API_ERROR_CODES, type ApiCode, type ApiErrorCode } from "@/lib/errors/codes";
+import { messageFor } from "@/lib/errors/messages";
 
 export { API_URL };
 
@@ -22,19 +24,57 @@ export interface ApiErrorPayload {
 }
 
 export class ApiError extends Error {
-  code: string;
-  status: number;
-  details?: unknown;
+  readonly code: string;
+  readonly status: number;
+  readonly details?: unknown;
   /** Seconds from the response's `Retry-After` header (429 / 409), when the backend sent one. */
-  retryAfterSeconds?: number;
+  readonly retryAfterSeconds?: number;
+  readonly errorCode: ApiCode;
+  readonly serverMessage: string;
 
-  constructor(error: ApiErrorPayload, status: number, retryAfterSeconds?: number) {
-    super(error.message);
+  constructor(
+    errorOrStatus: ApiErrorPayload | number,
+    statusOrCode?: number | string,
+    retryAfterOrMessage?: number | string,
+    detailsArg?: unknown,
+  ) {
+    let payloadCode: string;
+    let payloadMessage: string;
+    let payloadStatus: number;
+    let payloadDetails: unknown;
+    let retryAfterSeconds: number | undefined;
+
+    if (typeof errorOrStatus === "number") {
+      payloadStatus = errorOrStatus;
+      payloadCode = String(statusOrCode);
+      payloadMessage = String(retryAfterOrMessage ?? payloadCode);
+      payloadDetails = detailsArg;
+    } else {
+      payloadCode = errorOrStatus.code;
+      payloadMessage = errorOrStatus.message;
+      payloadDetails = errorOrStatus.details;
+      payloadStatus = Number(statusOrCode ?? 0);
+      retryAfterSeconds = typeof retryAfterOrMessage === "number" ? retryAfterOrMessage : undefined;
+    }
+
+    const isKnown = (API_ERROR_CODES as readonly string[]).includes(payloadCode);
+    const errorCode: ApiCode = isKnown ? `api.${payloadCode as ApiErrorCode}` : "api.HTTP_UNKNOWN";
+    const params: Record<string, string | number> =
+      typeof payloadDetails === "object" && payloadDetails
+        ? { ...(payloadDetails as Record<string, string | number>) }
+        : {};
+    if (retryAfterSeconds !== undefined && params.seconds === undefined) {
+      params.seconds = retryAfterSeconds;
+    }
+    const userMsg = messageFor(errorCode, params);
+    super(userMsg);
     this.name = "ApiError";
-    this.code = error.code;
-    this.status = status;
-    this.details = error.details;
+    this.code = payloadCode;
+    this.status = payloadStatus;
+    this.details = payloadDetails;
     this.retryAfterSeconds = retryAfterSeconds;
+    this.errorCode = errorCode;
+    this.serverMessage = payloadMessage;
   }
 }
 
@@ -233,7 +273,7 @@ async function request<T>(
       throw new ApiError(
         {
           code: "BACKEND_UNREACHABLE",
-          message: `Could not connect to the API server. Please ensure the backend is running at ${API_URL}`,
+          message: "Could not connect to the API server.",
         },
         0
       );

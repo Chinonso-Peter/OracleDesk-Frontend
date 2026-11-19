@@ -13,6 +13,7 @@
     "check:bindings": "node scripts/sync-bindings.mjs --check",
     "check:env": "node scripts/check-env-example.mjs",
     "check:sdk": "node scripts/check-sdk-major.mjs",
+    "check:api-errors": "node scripts/extract-api-error-codes.mjs --check",
     "spec:diff": "node scripts/spec-diff.mjs",
     "e2e:testnet": "vitest run --config vitest.e2e.config.mts",
     "e2e:x402": "vitest run --config vitest.x402.config.mts",

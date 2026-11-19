@@ -29,6 +29,7 @@ import { PendingPaymentCard } from "@/components/pending-payment-card";
 import { isUnfinishedPayment, listPending, removePending, savePending, type PendingPayment } from "@/lib/payments/pending";
 import { verifyPendingPayment, type VerifyResult } from "@/lib/payments/verify";
 import { DAILY_PASS_TRACE_PLACEHOLDER } from "@/lib/api/traces";
+import { userMessage } from "@/lib/errors/display";
 
 function renderTxPhase(phase: TxPhase): string | null {
   switch (phase.name) {
@@ -45,7 +46,7 @@ function renderTxPhase(phase: TxPhase): string | null {
     case "confirmed":
       return "Transaction confirmed.";
     case "failed":
-      return phase.error.message;
+      return userMessage(phase.error);
     case "expired":
       return "Transaction expired without confirmation.";
   }
@@ -232,7 +233,7 @@ export default function PremiumPageClient() {
       });
       setMultisigSession(session);
     } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : "Couldn't prepare the multisig payment.");
+      setStatusMessage(userMessage(error));
     }
   };
 
@@ -300,7 +301,7 @@ export default function PremiumPageClient() {
         setStatusMessage("Payment received. Activation is still pending and is listed above; you don't need to pay again.");
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Payment failed. Please try again.";
+      const message = userMessage(error);
       setStatusMessage(
         txHash === null ? `${message} If funds left your wallet, check its history before paying again.` : message,
       );

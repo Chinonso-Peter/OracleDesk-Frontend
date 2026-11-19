@@ -15,6 +15,7 @@ import { useViewedAddress } from "@/lib/hooks/useViewedAddress";
 import { useCopyTrade } from "@/lib/hooks/useCopyTrade";
 import { PendingCopyTrades } from "@/components/copy-trade/PendingCopyTrades";
 import { ApiError } from "@/lib/api/client";
+import { userMessage } from "@/lib/errors/display";
 import { useMarket } from "@/lib/hooks/useMarkets";
 import { useQuoteBuy, useUsdcBalance, useAccountReserve, usePrepareBuy, useOnChainMarket, fetchOnChainMarketBySimulation, useUsdcTrustline, useEnableUsdc, useUsdcBalanceState, type PreparedWriteReview } from "@/lib/hooks/useStellar";
 import { explorerTx, NETWORK_LABEL } from "@/lib/stellar/config";
@@ -93,7 +94,7 @@ function renderTxPhase(phase: TxPhase): string | null {
     case "confirmed":
       return "Transaction confirmed.";
     case "failed":
-      return phase.error.message;
+      return userMessage(phase.error);
     case "expired":
       return "Transaction expired without confirmation.";
   }
@@ -363,11 +364,7 @@ function CopyTradeContent() {
       );
       if (result.txHash) window.open(explorerTx(result.txHash), "_blank", "noopener,noreferrer");
     } catch (error) {
-      if (error instanceof ApiError && error.code === "TRACE_LOCKED") {
-        setStatusMessage("Unlock this trace before copying it.");
-      } else {
-        setStatusMessage(error instanceof Error ? error.message : "The trade didn't go through. Please try again.");
-      }
+      setStatusMessage(userMessage(error));
     } finally {
       setIsSubmitting(false);
     }
@@ -379,7 +376,7 @@ function CopyTradeContent() {
       await enableUsdc.mutateAsync();
       setStatusMessage("USDC is enabled. Click Confirm Copy Trade when you're ready.");
     } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : "Couldn't enable USDC.");
+      setStatusMessage(userMessage(error));
     }
   };
 
@@ -630,7 +627,7 @@ function CopyTradeContent() {
                   ) : quote.isFetching ? (
                     <span className="text-on-surface-variant">Quoting…</span>
                   ) : quote.error ? (
-                    <span className="text-error">{quote.error.message}</span>
+                    <span className="text-error">{userMessage(quote.error)}</span>
                   ) : (
                     <span className="text-on-surface-variant">—</span>
                   )}

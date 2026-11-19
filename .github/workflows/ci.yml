@@ -32,6 +32,9 @@ jobs:
       - name: Single SDK copy and major alignment guard
         run: npm run check:sdk
 
+      - name: Backend API error codes match documentation
+        run: npm run check:api-errors
+
       - name: Report contract interface changes
         run: node scripts/spec-diff.mjs --base "origin/${{ github.base_ref || 'main' }}" --summary "$GITHUB_STEP_SUMMARY"
 
