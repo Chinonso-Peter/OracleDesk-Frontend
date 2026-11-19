@@ -397,10 +397,11 @@ export const apiClient = {
     }, undefined, options);
   },
 
-  patch<T>(path: string, body?: unknown, options?: ApiRequestOptions) {
+  patch<T>(path: string, body?: unknown, headers?: HeadersInit, options?: ApiRequestOptions) {
     return request<T>(path, {
       method: "PATCH",
       body: body === undefined ? undefined : JSON.stringify(body),
+      headers,
     }, undefined, options);
   },
   delete<T>(path: string) {

@@ -35,7 +35,7 @@ export async function initiateCopyTrade(params: InitiateCopyTradeParams, options
     copyTradeId: string;
     transactionPayload: CopyTradePayload;
     instructions: string;
-  }>("/trade/copy", params, undefined, options);
+  }>("/trade/copy", params, { "Idempotency-Key": crypto.randomUUID() }, options);
 
   return data;
 }
@@ -45,7 +45,7 @@ export async function confirmCopyTrade(id: string, txHash: string, options?: Api
   const hash = assertValid(parseTxHash(txHash), "transaction hash");
   const { data } = await apiClient.patch<CopyTradeRecord>(apiPath`/trade/copy/${copyTradeId}/confirm`, {
     txHash: hash,
-  }, options);
+  }, { "Idempotency-Key": crypto.randomUUID() }, options);
 
   return data;
 }
