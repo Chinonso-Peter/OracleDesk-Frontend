@@ -272,6 +272,9 @@ export default function PremiumPageClient() {
         }
 
         setStatusMessage(null);
+        // Issue #228: gate on durable storage before moving funds
+        const { assertDurableStorage } = await import("@/lib/storage/quota");
+        await assertDurableStorage("daily-pass");
         const sent = await transfer.mutateAsync({
           to: PAYMENTS_RECIPIENT,
           amount: selectedTier.priceRaw,

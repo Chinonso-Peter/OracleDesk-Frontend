@@ -9,6 +9,9 @@ import PriceChart from "@/components/charts/price-chart";
 import { usePriceHistory } from "@/lib/hooks/usePriceHistory";
 import { DepthChart } from "@/components/charts/depth-chart";
 import { DemoBadge } from "@/components/ui/demo-badge";
+// Issue #231: lazy-load committee panel for markets using ResolutionSpec::Committee
+import dynamic from "next/dynamic";
+const CommitteePanel = dynamic(() => import("@/components/market/committee-panel").then((m) => ({ default: m.CommitteePanel })), { ssr: false, loading: () => null });
 
 const MarketHeader = () => {
   return (

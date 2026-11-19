@@ -142,7 +142,13 @@ export function useCopyTrade() {
           state: "initiated", txHash: null, attempts: 0, nextAttemptAt: 0, createdAt: Date.now(),
         };
         copyTradeId = entry.copyTradeId;
+        // Issue #228: gate on durable storage before signing; also refuse if outbox write failed
+        const { assertDurableStorage } = await import("@/lib/storage/quota");
+        await assertDurableStorage("copy-trade");
         const durable = writeOutbox(trader, [...readOutbox(trader), entry]);
+        if (!durable) {
+          throw new Error("Storage unavailable: could not record this trade. Clear browser data or try again.");
+        }
         // Never sign a changed backend payload without another explicit review.
         if (payload.userWallet !== trader || payload.contractId !== CONTRACTS.marketCore ||
             payload.onChainMarketId !== String(input.marketId) || payload.outcome !== input.outcome || payload.collateralInRaw !== input.collateralIn.toString()) {

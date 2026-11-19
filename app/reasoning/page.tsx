@@ -9,7 +9,9 @@ import { mergeTracePages } from "@/lib/hooks/trace-feed";
 import { getTrace, type ReasoningTrace } from "@/lib/api/traces";
 import { useWallet } from "@/lib/contexts/WalletContext";
 import { X402_ENABLED, useUnlockCart } from "@/lib/hooks/useX402";
-import { UnlockCart } from "@/components/trace/unlock-cart";
+// Issue #229: UnlockCart is lazy-loaded so the x402 bundle doesn't block the reasoning route
+import dynamic from "next/dynamic";
+const UnlockCart = dynamic(() => import("@/components/trace/unlock-cart").then((m) => ({ default: m.UnlockCart })), { ssr: false, loading: () => null });
 import { DAILY_PASS_PRICE_RAW } from "@/lib/stellar/config";
 
 /** Fallback daily-pass price when no trace quoted one (same rule as /premium). */

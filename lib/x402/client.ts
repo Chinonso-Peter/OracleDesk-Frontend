@@ -276,6 +276,9 @@ function safeErrorText(error: unknown, paymentHeader: string): string {
 export async function unlockTrace(opts: UnlockOptions, deps: UnlockDeps): Promise<UnlockResult> {
   const { journal } = deps;
   if (!journal) throw new JournalUnavailableError();
+  // Issue #228: gate on durable storage before signing
+  const { assertDurableStorage } = await import("@/lib/storage/quota");
+  await assertDurableStorage("x402");
   const network = deps.transport.network;
   const lock = deps.lock ?? (<T,>(fn: () => Promise<T>) => withTraceLock(opts.wallet, network, opts.onChainTraceId, fn));
   const sleep = deps.sleep ?? defaultSleep;

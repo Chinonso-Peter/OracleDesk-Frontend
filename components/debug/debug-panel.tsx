@@ -12,8 +12,9 @@ import { redact } from "@/lib/diagnostics/redact";
 import { rpcPool } from "@/lib/stellar/clients";
 import { RpcPanel } from "./RpcPanel";
 import type { DebugTab } from "./debug-mount";
+import { storageStatus, type StorageStatus } from "@/lib/storage/quota";
 
-const TABS: DebugTab[] = ["config", "wallet", "cache", "simulations", "rpc", "errors"];
+const TABS: DebugTab[] = ["config", "wallet", "cache", "simulations", "rpc", "errors", "storage"];
 
 function preview(v: unknown, max = 160): string {
   try {
@@ -30,6 +31,23 @@ function useStellarQueries(): Query[] {
   useEffect(() => cache.subscribe(() => setVersion((v) => v + 1)), [cache]);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- version forces a re-read on cache events
   return useMemo(() => cache.findAll({ queryKey: ["stellar"] }), [cache, version]);
+}
+
+function StorageDebugTab() {
+  const [status, setStatus] = useState<StorageStatus | null>(null);
+  useEffect(() => { storageStatus().then(setStatus).catch(() => null); }, []);
+  if (!status) return <p className="text-outline">Loading storage…</p>;
+  return (
+    <div className="space-y-1 font-data-mono text-[11px]">
+      <p>persisted: {String(status.persisted)} | persistSupported: {String(status.persistSupported)}</p>
+      <p>usage: {status.usage.toLocaleString()} B / quota: {status.quota.toLocaleString()} B</p>
+      <ul className="mt-1 space-y-0.5">
+        {status.stores.map((s) => (
+          <li key={s.id}><span className="text-outline">[{s.cls}]</span> {s.id}: {s.bytes.toLocaleString()} B</li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 export default function DebugPanel({ initialTab, onClose }: { initialTab: DebugTab; onClose: () => void }) {
@@ -153,6 +171,8 @@ export default function DebugPanel({ initialTab, onClose }: { initialTab: DebugT
             {errors.length === 0 && <li className="text-outline">No errors.</li>}
           </ul>
         )}
+        {/* Issue #228: storage debug tab */}
+        {tab === "storage" && <StorageDebugTab />}
       </div>
 
       <footer className="border-t border-outline-variant p-2 space-y-2">
