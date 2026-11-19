@@ -5,12 +5,13 @@ import { messageFor } from "@/lib/errors/messages";
 
 export { API_URL };
 
-export interface ApiRequestOptions { expectScope?: UserScope; signal?: AbortSignal; trace?: TraceCtx }
-/** Structural match for a zod schema, so this module does not import zod itself. */
-export interface ResponseSchema<T> {
-  safeParse(value: unknown): { success: true; data: T } | { success: false; error: { issues: readonly { path: readonly PropertyKey[]; message: string }[] } };
+export interface ApiRequestOptions {
+  expectScope?: UserScope;
+  signal?: AbortSignal;
+  trace?: TraceCtx;
+  /** Internal flag to prevent infinite loops when retrying after step-up auth. */
+  _stepUpRetried?: boolean;
 }
-type SchemaOptions<T> = ApiRequestOptions & { schema?: ResponseSchema<T> };
 const sessionListeners = new Set<() => void>();
 const authInvalidListeners = new Set<() => void>();
 export function onAuthSessionChanged(listener: () => void) {
@@ -20,6 +21,16 @@ export function onAuthSessionChanged(listener: () => void) {
 export function onAuthInvalid(listener: () => void) {
   authInvalidListeners.add(listener);
   return () => { authInvalidListeners.delete(listener); };
+}
+
+export type StepUpPromptHandler = (details: { maxAgeSeconds?: number; reauthenticate?: boolean }) => Promise<boolean>;
+let stepUpHandler: StepUpPromptHandler | null = null;
+
+export function registerStepUpHandler(handler: StepUpPromptHandler | null) {
+  stepUpHandler = handler;
+  return () => {
+    if (stepUpHandler === handler) stepUpHandler = null;
+  };
 }
 
 export interface ApiErrorPayload {
@@ -254,6 +265,31 @@ export function storeAuthSession(session: {
   sessionListeners.forEach((listener) => listener());
 }
 
+const tokenRotatedListeners = new Set<() => void>();
+/** Fires when a refreshed token replaces the current one; the session id is unchanged. */
+export function onTokenRotated(listener: () => void) {
+  tokenRotatedListeners.add(listener);
+  return () => { tokenRotatedListeners.delete(listener); };
+}
+
+/**
+ * Swap in a refreshed bearer token (issue #269) without rotating the session id,
+ * so user-scoped caches survive. Refuses if the wallet or session changed meanwhile.
+ */
+export function replaceToken(
+  next: { token: string; userId: string; walletAddress: string },
+  expectedSessionId: string,
+): boolean {
+  if (SESSION_MODE === "cookie") return false;
+  const storage = getBrowserStorage();
+  if (!storage?.getItem(TOKEN_KEY)) return false;
+  if (storage.getItem(WALLET_KEY) !== next.walletAddress) return false;
+  if (storage.getItem(SESSION_KEY) !== expectedSessionId) return false;
+  storage.setItem(TOKEN_KEY, next.token);
+  tokenRotatedListeners.forEach((listener) => listener());
+  return true;
+}
+
 /** Wallet address the backend session belongs to, if any. */
 export function getStoredSessionWallet() {
   if (SESSION_MODE === "cookie") return confirmedSessionWallet;
@@ -342,6 +378,16 @@ async function request<T>(
   assertScope();
 
   if (!response.ok || envelope?.ok === false) {
+    const isStepUp = response.status === 403 && (apiError?.code === "STEP_UP_REQUIRED" || (apiError?.details as any)?.reauthenticate === true);
+    if (isStepUp && !options._stepUpRetried && stepUpHandler) {
+      const stepUpDetails = (apiError?.details as { maxAgeSeconds?: number; reauthenticate?: boolean }) ?? { reauthenticate: true };
+      const confirmed = await stepUpHandler(stepUpDetails);
+      if (confirmed) {
+        // Re-execute request once with _stepUpRetried flag set to true
+        return request<T>(path, init, params, { ...options, _stepUpRetried: true });
+      }
+    }
+
     const authFailure = ["TOKEN_EXPIRED", "INVALID_TOKEN", "UNAUTHORIZED"].includes(apiError?.code ?? "") ||
       (response.status === 401 && !apiError);
     const sessionIsCurrent = requestSessionId === getStoredSessionId();

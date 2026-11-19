@@ -15,6 +15,9 @@ export const userKeys = {
   portfolio: (s: UserScope) => [...scopeKey(s), "portfolio"] as const,
   marketGeneration: (s: UserScope, jobId: string) => [...scopeKey(s), "market-generation", jobId] as const,
   x402Journal: (s: UserScope, network: string, wallet: string | null) => [...scopeKey(s), "x402", "journal", network, wallet] as const,
+  adminRoles: (s: UserScope) => [...scopeKey(s), "admin", "roles"] as const,
+  adminAdmins: (s: UserScope) => [...scopeKey(s), "admin", "admins"] as const,
+  adminPermissions: (s: UserScope) => [...scopeKey(s), "admin", "permissions"] as const,
 };
 export const publicKeys = {
   markets: (p: ListMarketsParams) => ["markets", p] as const,

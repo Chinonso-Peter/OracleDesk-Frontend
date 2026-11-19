@@ -112,7 +112,16 @@
       "VALIDATION_ERROR": "The request data failed validation.",
       "TRACE_LOCKED": "Unlock this trace before copying it.",
       "BACKEND_UNREACHABLE": "Couldn't reach the backend. Check your connection and try again.",
-      "HTTP_UNKNOWN": "An unexpected server error occurred."
+      "HTTP_UNKNOWN": "An unexpected server error occurred.",
+      "ADMIN_OP_EXPIRED": "This treasury operation has expired and cannot be signed or submitted.",
+      "ADMIN_OP_HASH_MISMATCH": "The locally computed transaction hash does not match the server's prepared hash.",
+      "ADMIN_OP_NOT_READY": "This operation has not collected sufficient signature weight to meet the high threshold requirement.",
+      "ADMIN_OP_NOT_SIGNABLE": "This operation is no longer in a signable state.",
+      "PREFLIGHT_FAILED": "Preflight safety checks failed for this treasury operation.",
+      "SIMULATION_FAILED": "The transaction simulation failed on the network.",
+      "STEP_UP_REQUIRED": "Additional wallet authentication is required for this privileged action.",
+      "TESTNET_ONLY": "Submitting treasury transactions is restricted to Stellar Testnet only.",
+      "UNSUPPORTED_ADMIN_KIND": "Contract-based (C-address) admin accounts are not supported; use a standard multisig account."
     }
   }
 }

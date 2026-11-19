@@ -6,6 +6,8 @@ import { io } from "socket.io-client";
 import { API_URL } from "@/lib/api/client";
 import { createBatcher, type Batch } from "./batch";
 import type { RealtimeEvent } from "./types";
+import { isMarketPricePayload } from "./types";
+import { marketPriceStore, type ProvisionalPrice } from "./market-price-store";
 import { parseReasoningPublished, parseTradeExecuted } from "@/lib/validation/events";
 import { REALTIME_CHANNEL, REALTIME_LEADER_LOCK, runWhileLeader, type RelayMessage } from "./leader";
 
@@ -29,72 +31,67 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     const visibility = () => batcher.setPaused(document.hidden);
     visibility();
     document.addEventListener("visibilitychange", visibility);
-    // Every tab validates what it receives, whether from its own socket or relayed by the leader.
-    const deliver = (name: RelayEventName, payload: unknown) => {
-      if (name === "TRADE_EXECUTED") {
-        const event = parseTradeExecuted(payload);
-        if (event) batcher.push({ type: "TRADE_EXECUTED", payload: event, receivedAt: Date.now() });
-        else console.debug("[realtime] dropped invalid TRADE_EXECUTED payload");
+    const socket = io(API_URL.replace(/\/api\/v1\/?$/, ""));
+    const onConnect = () => setStatus("connected");
+    const onDisconnect = () => setStatus("reconnecting");
+    const onConnectError = () => setStatus("offline");
+    const onReconnectAttempt = () => setStatus("reconnecting");
+    socket.on("connect", onConnect);
+    socket.on("disconnect", onDisconnect);
+    socket.on("connect_error", onConnectError);
+    socket.io.on("reconnect_attempt", onReconnectAttempt);
+    socket.on("TRADE_EXECUTED", (payload: unknown) => {
+      const event = parseTradeExecuted(payload);
+      if (event) batcher.push({ type: "TRADE_EXECUTED", payload: event, receivedAt: Date.now() });
+      else console.debug("[realtime] dropped invalid TRADE_EXECUTED payload");
+    });
+    socket.on("REASONING_PUBLISHED", (payload: unknown) => {
+      const event = parseReasoningPublished(payload);
+      if (event) batcher.push({ type: "REASONING_PUBLISHED", payload: event, receivedAt: Date.now() });
+      else console.debug("[realtime] dropped invalid REASONING_PUBLISHED payload");
+    });
+    socket.on("MARKET_PRICE", (payload: unknown) => {
+      if (isMarketPricePayload(payload)) {
+        marketPriceStore.applyTick(payload);
       } else {
-        const event = parseReasoningPublished(payload);
-        if (event) batcher.push({ type: "REASONING_PUBLISHED", payload: event, receivedAt: Date.now() });
-        else console.debug("[realtime] dropped invalid REASONING_PUBLISHED payload");
+        console.debug("[realtime] dropped invalid MARKET_PRICE payload");
       }
+    });
+    return () => {
+      socket.disconnect();
+      stop();
+      batcher.dispose();
+      marketPriceStore.dispose();
+      document.removeEventListener("visibilitychange", visibility);
     };
-
-    // One socket per origin: only the tab holding the leader lock connects and
-    // relays to the others over BroadcastChannel. Without Web Locks or
-    // BroadcastChannel every tab connects itself, as before.
-    const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
-    const channel = locks && typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(REALTIME_CHANNEL) : null;
-    let leaderStatus: SocketStatus = "unknown";
-    const openSocket = () => {
-      const socket = io(API_URL.replace(/\/api\/v1\/?$/, ""));
-      const report = (next: SocketStatus) => {
-        leaderStatus = next;
-        setStatus(next);
-        channel?.postMessage({ t: "status", status: next } satisfies RelayMessage);
-      };
-      socket.on("connect", () => report("connected"));
-      socket.on("disconnect", () => report("reconnecting"));
-      socket.on("connect_error", () => report("offline"));
-      socket.io.on("reconnect_attempt", () => report("reconnecting"));
-      for (const name of RELAY_EVENTS) {
-        socket.on(name, (payload: unknown) => {
-          deliver(name, payload);
-          channel?.postMessage({ t: "event", name, payload } satisfies RelayMessage);
-        });
-      }
-      return () => { socket.disconnect(); leaderStatus = "unknown"; };
-    };
-
-    let close: () => void;
-    if (locks && channel) {
-      let leading = false;
-      channel.onmessage = (message: MessageEvent<RelayMessage>) => {
-        const data = message.data;
-        if (!data || typeof data !== "object") return;
-        if (data.t === "hello" && leading) channel.postMessage({ t: "status", status: leaderStatus } satisfies RelayMessage);
-        else if (data.t === "status" && !leading) setStatus(data.status);
-        else if (data.t === "event" && !leading && RELAY_EVENTS.includes(data.name)) deliver(data.name, data.payload);
-      };
-      const stopLeading = runWhileLeader(REALTIME_LEADER_LOCK, () => {
-        leading = true;
-        const closeSocket = openSocket();
-        return () => { leading = false; closeSocket(); };
-      }, locks);
-      channel.postMessage({ t: "hello" } satisfies RelayMessage);
-      close = () => { stopLeading(); channel.close(); };
-    } else {
-      close = openSocket();
-    }
-    return () => { close(); stop(); batcher.dispose(); document.removeEventListener("visibilitychange", visibility); };
   }, [listeners]);
   return <Context.Provider value={listeners}><StatusContext.Provider value={status}><MotionConfig reducedMotion="user">{children}</MotionConfig></StatusContext.Provider></Context.Provider>;
 }
 
 export function useRealtimeStatus(): SocketStatus {
   return useContext(StatusContext);
+}
+
+export function useProvisionalPrice(onChainMarketId: string | null | undefined): ProvisionalPrice | null {
+  const [provisional, setProvisional] = useState<ProvisionalPrice | null>(() => {
+    return onChainMarketId ? marketPriceStore.getProvisionalPrice(onChainMarketId) ?? null : null;
+  });
+
+  useEffect(() => {
+    if (!onChainMarketId) {
+      setProvisional(null);
+      return;
+    }
+    setProvisional(marketPriceStore.getProvisionalPrice(onChainMarketId) ?? null);
+    const unsub = marketPriceStore.subscribePrice((updated) => {
+      if (updated.onChainMarketId === onChainMarketId) {
+        setProvisional(updated);
+      }
+    });
+    return unsub;
+  }, [onChainMarketId]);
+
+  return provisional;
 }
 
 export function useRealtimeBatch(handler: Listener) {
