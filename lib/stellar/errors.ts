@@ -27,7 +27,7 @@ export interface ErrorContext {
 
 export interface DescribedError {
   kind: DescribedErrorKind;
-  errorCode: ErrorCode;
+  errorCode?: ErrorCode;
   params?: Record<string, string | number>;
   message: string;
   action?: "enable-usdc";

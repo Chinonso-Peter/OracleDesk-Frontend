@@ -1,5 +1,29 @@
 # Frontend architecture
 
+## Self-hosted assets and origins
+
+Every asset is served from this origin. There are no third-party fonts or
+illustrations: `next/font/google` downloads and self-hosts Geist/Geist Mono/
+Inter at build time, icons come from `components/ui/icon.tsx`, and images live
+in `public/images/`. `next.config.ts` sets `images.remotePatterns: []`, so
+`next/image` refuses remote sources. `npm run check:origins` scans the build
+output after `npm run build` and fails on any origin outside the configured
+API, RPC, IPFS, x402 and explorer endpoints; reviewed non-fetch strings live
+in `scripts/external-origins.allow.json` with a reason. Wallet kit endpoints
+(WalletConnect, Albedo, Trezor) are contacted only after the user opens a
+wallet, and are listed there as such.
+
+## Untrusted input
+
+Identifiers are parsed before use with the strict parsers in
+`lib/validation/ids.ts` (UUID/slug, u64, 32-byte hash, CID, G-account,
+C-contract). API paths are built with `apiPath` in `lib/api/client.ts`, which
+encodes each segment and refuses traversal; the request layer also checks the
+final URL stays under `API_URL`. Socket payloads are validated by
+`lib/validation/events.ts` and invalid events are dropped. `explorerTx`,
+`explorerAccount` and `ipfsUrl` return `null` for invalid input, and external
+URLs from backend data pass `safeExternalUrl` before being rendered as links.
+
 ## Where data comes from
 
 The frontend has two sources that can disagree, and it says which one a value came from (the small `chain` / `backend` tags in the UI).

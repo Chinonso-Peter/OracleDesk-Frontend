@@ -320,7 +320,7 @@ function OnChainOnlyMarkets({ knownIds }: { knownIds: Set<string> }) {
         {orphans.map((v) => (
           <MarketCard
             key={v.id}
-            href={`/markets/quick-view?onChainId=${v.id}&from=markets`}
+            href={`/markets/quick-view?onChainId=${encodeURIComponent(v.id)}&from=markets`}
             category={v.market.category.tag}
             onChainMarketId={v.id}
             expiry={new Date(Number(v.market.close_time) * 1000).toLocaleDateString('en-US', { month: 'short', year: '2-digit' }).toUpperCase()}
@@ -428,7 +428,7 @@ export default function MarketsPageClient() {
                 return (
                   <div {...a11y}>
                     <MarketCard 
-                      href={`/markets/quick-view?marketId=${m.id}&from=markets`}
+                      href={`/markets/quick-view?marketId=${encodeURIComponent(m.id)}&from=markets`}
                       category={m.category}
                       onChainMarketId={m.onChainMarketId}
                       reasoningTraces={m.reasoningTraces}

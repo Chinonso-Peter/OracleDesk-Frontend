@@ -16,7 +16,51 @@ import { priceYesBps } from "@/lib/stellar/generated/fpmm";
 import type { Market as OnChainMarket, Position } from "@/lib/stellar/generated/market-core";
 import { fetchAndVerifyTrace, type TraceCheck } from "@/lib/stellar/trace";
 import { planSell } from "@/lib/stellar/trade-plan";
-import { minOut } from "@/lib/stellar/units";
+import { feeBreakdown, fetchBaseReserve, spendableXlm, type AccountReserve, type FeeBreakdown } from "@/lib/stellar/fees";
+import { maxIn, minOut } from "@/lib/stellar/units";
+import { CONTRACTS, NETWORK_LABEL, NETWORK_PASSPHRASE } from "@/lib/stellar/config";
+import { DEBUG_ENABLED } from "@/lib/diagnostics/flags";
+import { recordSimulation } from "@/lib/diagnostics/events";
+import { currentRpcUrl, rpcPool, rpcServer, withPinnedRpc } from "@/lib/stellar/clients";
+import { getTrustlineState, enableUsdcTrustline, usdcClassicAsset, type TrustlineState } from "@/lib/stellar/trustline";
+import { read, send, simulated } from "@/lib/stellar/tx";
+import { simulatedWithLedger, submit } from "@/lib/stellar/typed-call";
+import { createMarketBatcher } from "@/lib/stellar/market-batch";
+import type { Config } from "@/lib/stellar/generated/market-core";
+import { Stamped, reconcileRead } from "@/lib/stellar/optimistic";
+import type { Preflight, PreflightFailure, PreflightInput } from "@/lib/stellar/preflight";
+import { preflightBuy, preflightRedeem } from "@/lib/stellar/preflight";
+import { assertIntentMatches, describeAssembled, type ReviewModel } from "@/lib/stellar/tx-decode";
+import { describeSubmission } from "@/lib/stellar/errors";
+import { cancelTradeReads, confirmTrade } from "@/lib/stellar/optimistic-cache";
+import { getSubmitQueue } from "@/lib/stellar/submit-queue";
+import { discoverRedeemable, loadRedeemAllResume, saveRedeemAllResume, type ItemState, type RedeemAllResume, type RedeemDiscovery } from "@/lib/stellar/redeem-all";
+import { fetchVerifiedTrace, type VerifiedTrace } from "@/lib/stellar/verified-trace";
+import { solveSellForShares, reconcileWithQuote } from "@/lib/stellar/sell-solver";
+import { minCollateralForShares } from "@/lib/stellar/quote";
+import {
+  MULTISIG_DEFAULT_SLIPPAGE_BPS,
+  MULTISIG_DEFAULT_TIMEOUT_S,
+  MULTISIG_SESSIONS_KEY,
+  isExpiredByLedger,
+  isExpiredByWallClock,
+  isMultisigAccount,
+  loadMultisigSessions,
+  mergeSigned,
+  nonInvokerAddresses,
+  readAccountAuth,
+  removeMultisigSession,
+  requiredThreshold,
+  signatureWeight,
+  upsertMultisigSession,
+  type AccountAuth,
+  type MultisigSession,
+} from "@/lib/stellar/multisig";
+import { tradeInvalidationKeys } from "@/lib/stellar/tx-tracker-core";
+import { useTxTracker } from "@/lib/stellar/tx-tracker";
+import { useUpdatePending } from "@/lib/pwa/update-context";
+import { useWalletAddress, useWalletNetwork, useWalletSigner } from "@/lib/stellar/WalletProvider";
+import { TxLifecycle } from "@/lib/stellar/tx-lifecycle";
 
 /** Query keys all start with "stellar" so a disconnect can drop them in one go. */
 export const stellarKeys = {
@@ -1071,7 +1115,7 @@ export function useSell() {
       if (context && ["network", "unknown", "expired", "submission"].includes(kind)) invalidate(String(v.marketId), context.holder);
     },
     mutationFn: async (params: SellParams) => {
-      const { marketId, outcome, slippageBps } = params;
+      const { marketId, outcome, shares, slippageBps } = params;
       const signer = guard();
       return runQueuedWrite(signer, `Sell ${outcome} on #${marketId}`, dedupeValue("sell", marketId, outcome, params.shares), guard, async () => {
       await requireUsdcTrustline(signer.publicKey);
@@ -1099,13 +1143,23 @@ export function useSell() {
         collateral_out: plan.collateralOut,
         max_shares_in: plan.maxSharesIn,
       });
-      const { value, txHash } = await send<bigint>(tx);
-      return { sharesSold: value, collateralOut: plan.collateralOut, maxSharesIn: plan.maxSharesIn, txHash, holder: signer.publicKey };
+      const { value, txHash, ledger } = await send(tx);
+      return { sharesSold: value, collateralOut: plan.collateralOut, maxSharesIn: plan.maxSharesIn, txHash, ledger, holder: signer.publicKey };
+      });
     },
     onSuccess: async (d, v) => {
       // Cancel again: a focus/refetch may have started while the wallet was signing.
       await cancelTradeReads(queryClient, String(v.marketId), d.holder);
-      confirmTrade(queryClient, { ...v, ...d, kind: "sell", marketId: String(v.marketId) });
+      confirmTrade(queryClient, {
+        kind: "sell",
+        marketId: String(v.marketId),
+        holder: d.holder,
+        ledger: d.ledger ?? null,
+        txHash: d.txHash,
+        outcome: v.outcome,
+        sharesSold: d.sharesSold,
+        collateralOut: d.collateralOut,
+      });
       for (const key of [stellarKeys.market(String(v.marketId)), ["stellar", "markets"], stellarKeys.account(d.holder)]) {
         void queryClient.invalidateQueries({ queryKey: key });
       }

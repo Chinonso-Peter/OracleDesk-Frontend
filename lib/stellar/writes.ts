@@ -107,7 +107,7 @@ export async function executeBuy(signer: Signer, p: BuyParams, deps?: WriteDeps)
     outcome: outcomeObj,
     collateral_in: p.collateralIn,
     min_shares_out: minSharesOut,
-    recipient: signer.publicKey,
+    trader: signer.publicKey,
   });
 
   const { value, txHash, ledger } = await send(buyTx, "marketCore");

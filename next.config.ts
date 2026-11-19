@@ -41,6 +41,13 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   /**
+   * Every asset is self-hosted (issue #121). Remote images are refused by
+   * default; add a reviewed host here only if it is unavoidable, and add it to
+   * scripts/external-origins.allow.json with a reason.
+   */
+  images: { remotePatterns: [], formats: ["image/avif", "image/webp"] },
+
+  /**
    * The seven demo-only routes retired by issue #49. Their UI moved to
    * components/demo/ and renders only in the noindex design gallery at
    * /dev/gallery when NEXT_PUBLIC_ENABLE_DEMO_ROUTES is set; the old URLs go

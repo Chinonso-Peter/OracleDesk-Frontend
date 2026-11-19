@@ -1,4 +1,5 @@
 "use client";
+import Image from "next/image";
 import { Icon } from "@/components/ui/icon";
 
 import { TxReview, TxReviewPreferenceControl, shouldSkipTxReview } from "@/components/tx-review";
@@ -293,9 +294,9 @@ export default function PremiumPageClient() {
       setStatusMessage("Payment sent. Waiting for OracleDesk to verify it on-chain…");
       const result = await resumePayment(payment, ensureSession);
       if (!saved) {
-        setStatusMessage(`Couldn't save this payment on this device. Keep this transaction: ${explorerTx(txHash)}`);
+        setStatusMessage(`Couldn't save this payment on this device. Keep this transaction: ${explorerTx(txHash) ?? "unavailable"}`);
       } else if (result === "verified") {
-        setStatusMessage(`Your daily pass is active for 24 hours. Transaction: ${explorerTx(txHash)}`);
+        setStatusMessage(`Your daily pass is active for 24 hours. Transaction: ${explorerTx(txHash) ?? "unavailable"}`);
         setTimeout(() => setSelectedTier(null), 4000);
       } else {
         setStatusMessage("Payment received. Activation is still pending and is listed above; you don't need to pay again.");
@@ -448,10 +449,12 @@ export default function PremiumPageClient() {
             </div>
           </div>
           <div className="md:w-1/2 relative h-64 md:h-auto overflow-hidden">
-            <img
-              className="absolute inset-0 w-full h-full object-cover grayscale opacity-80"
-              alt="AI Reasoning Visualization"
-              src="https://lh3.googleusercontent.com/aida-public/AB6AXuAa6_iBtnOn_m37HN9i8iSM2WGtLI2O7724tEV1Lwtbv-GGPQ23M_8Ng5x56bioNBpuHpLU5pnYBL3d8-em8tJDo4E1MGMdaCxefcsadvDMXYBr7fBmUYgX9aeZNQ_Hmx2d7KN57E8mUefZU9FDAW7Dprf7vIVrX3lK4CuZXz1njfkdn9pfaRe2ujTB9rsBD_BZUXUbRwNAkdVh9-cGODrXj8J5pggMpgxMrCUHFsylQTCEbzk7CM0sJVfddH4ugiek22UZ3yMKNA"
+            <Image
+              fill
+              sizes="(min-width: 768px) 50vw, 100vw"
+              className="object-cover grayscale opacity-80"
+              alt=""
+              src="/images/premium-reasoning.webp"
             />
             <div className="absolute inset-0 bg-gradient-to-r from-surface-container-low via-transparent to-transparent md:block hidden"></div>
           </div>
@@ -535,10 +538,12 @@ export default function PremiumPageClient() {
                 onClick={() => setPaymentMethod('usdc')}
               >
                 <div className="w-10 h-10 bg-surface rounded-full flex items-center justify-center mr-4 border border-outline-variant overflow-hidden p-2">
-                  <img
+                  <Image
                     alt="USDC"
+                    width={40}
+                    height={40}
                     className="w-full h-full object-contain"
-                    src="https://lh3.googleusercontent.com/aida-public/AB6AXuBBvpQJwosd2Frufdsjv33xmFEaqtUyhsE7FZ71B5HnGDdKxuZG6lxUBHLUN_72b5kg8Agl5q3-hEH2fEuAb-_pLcvFyXnM2K9saaM5DGU8S2lDvNZOLVEDFLm5SZ9m-oysbN474n7-m_f-fQPvR6m4aDDh2HeL4e_wKmfjwe5QkDRKk08h6N-QM6DBGHrMYIomFLujEFtdcTyccMq0i3ccnRBg7U4tC0Ig0D_KgAfB-bt_2ZdSeXk_I5gkzYAQszAvYnfg5lpgPA"
+                    src="/images/usdc-token.webp"
                   />
                 </div>
                 <div className="flex-grow">

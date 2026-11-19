@@ -11,7 +11,12 @@ import {
   shortAddress,
   tryParseUsdc,
   USDC_UNIT,
+  XLM_UNIT,
+  formatXlm,
+  mulDivFloor,
+  mulDivCeil,
 } from "../units";
+import { BPS as FPMM_BPS, calcBuy, priceYesBps } from "../generated/fpmm";
 import { usdcStringArb } from "./arbitraries";
 
 describe("parseUsdc / formatUsdc", () => {

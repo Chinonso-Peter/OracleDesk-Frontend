@@ -466,7 +466,7 @@ export function BuyTicket({ onChainMarketId, side, amountInputRef }: BuyTicketPr
           <span>{renderTxPhase(buy.phase) ?? "Processing transaction…"}</span>
           {"hash" in buy.phase && buy.phase.hash && (
             <a
-              href={explorerTx(buy.phase.hash)}
+              href={explorerTx(buy.phase.hash) ?? undefined}
               target="_blank"
               rel="noopener noreferrer"
               className="text-primary hover:underline font-data-mono"
@@ -489,7 +489,7 @@ export function BuyTicket({ onChainMarketId, side, amountInputRef }: BuyTicketPr
           {buyResult.kind === "success" && buyResult.txHash && (
             <div>
               <a
-                href={explorerTx(buyResult.txHash)}
+                href={explorerTx(buyResult.txHash) ?? undefined}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-primary hover:underline font-data-mono inline-block"
