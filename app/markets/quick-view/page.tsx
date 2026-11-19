@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { useMarket, useMarketQuestionIntegrity } from "@/lib/hooks/useMarkets";
 import { QuestionVerificationBadge } from "@/components/question-verification-badge";
+import { VerifiedQuestionViewer } from "@/components/market/verified-question-viewer";
 import { ResolverStatusPanel } from "@/components/resolver-status-panel";
 import { getMarketByOnChainId, getResolution } from "@/lib/api/markets";
 import { ApiError } from "@/lib/api/client";
@@ -125,13 +126,20 @@ function MarketQuickViewContent() {
   const initialFocusRef = (onChainMarketId !== null && isOpen) ? amountInputRef : yesButtonRef;
 
   const title = market?.question ?? `Market #${onChainMarketId} · ${view?.market.meta_uri ?? ""}`;
+  const fromChain = Boolean(view?.market);
   const questionIntegrity = useMarketQuestionIntegrity({
     marketId,
     onChainMarketId,
     displayedQuestion: title,
-    metaUri: view?.market.meta_uri ?? market?.metaUri,
-    questionHash: view?.market.question_hash ?? market?.questionHash,
+    metaUri: view?.market.meta_uri ?? null,
+    questionHash: view?.market.question_hash ?? null,
+    hasChainRead: fromChain,
+    chainMarket: view?.market,
   });
+
+  const displayTitle = questionIntegrity.data?.status === "verified" && questionIntegrity.data.committedQuestion
+    ? questionIntegrity.data.committedQuestion
+    : title;
 
   const isLoading = backendById.isLoading || (backendByChainId.isLoading && !marketId) || (chain.isLoading && !market);
   const notFound = !market && !view;
@@ -251,11 +259,11 @@ function MarketQuickViewContent() {
           {/* Content Area */}
           <div className="p-6 space-y-6">
             {/* Market Question */}
-            <div className="space-y-2">
+            <div className="space-y-3">
               <div className="flex items-start justify-between gap-3">
                 <DialogTitle asChild>
                   <h2 className="font-headline-sm text-headline-sm text-on-surface leading-tight">
-                    {title}
+                    {displayTitle}
                   </h2>
                 </DialogTitle>
                 {questionIntegrity.data && (
@@ -267,6 +275,9 @@ function MarketQuickViewContent() {
               </div>
               {questionIntegrity.data?.status === "mismatch" && (
                 <QuestionVerificationBadge status="mismatch" result={questionIntegrity.data} />
+              )}
+              {questionIntegrity.data && (
+                <VerifiedQuestionViewer check={questionIntegrity.data} />
               )}
             </div>
 

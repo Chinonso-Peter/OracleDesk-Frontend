@@ -141,6 +141,13 @@ function AdminContent() {
           CREATE NEW MARKET
         </Link>
         <Link
+          href="/admin/treasury"
+          className="border border-primary text-primary px-6 py-4 rounded-lg font-label-caps text-label-caps flex items-center gap-2 hover:bg-primary/10 transition-all font-bold"
+        >
+          <Icon name="account_balance" />
+          TREASURY CONSOLE
+        </Link>
+        <Link
           href="/admin/agents"
           className="border border-outline text-on-surface px-6 py-4 rounded-lg font-label-caps text-label-caps flex items-center gap-2 hover:bg-surface-container-low transition-all"
         >

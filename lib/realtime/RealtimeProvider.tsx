@@ -6,6 +6,8 @@ import { io } from "socket.io-client";
 import { API_URL } from "@/lib/api/client";
 import { createBatcher, type Batch } from "./batch";
 import type { RealtimeEvent } from "./types";
+import { isMarketPricePayload } from "./types";
+import { marketPriceStore, type ProvisionalPrice } from "./market-price-store";
 import { parseReasoningPublished, parseTradeExecuted } from "@/lib/validation/events";
 
 type Listener = (batch: Batch<RealtimeEvent>) => void;
@@ -44,13 +46,48 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       if (event) batcher.push({ type: "REASONING_PUBLISHED", payload: event, receivedAt: Date.now() });
       else console.debug("[realtime] dropped invalid REASONING_PUBLISHED payload");
     });
-    return () => { socket.disconnect(); stop(); batcher.dispose(); document.removeEventListener("visibilitychange", visibility); };
+    socket.on("MARKET_PRICE", (payload: unknown) => {
+      if (isMarketPricePayload(payload)) {
+        marketPriceStore.applyTick(payload);
+      } else {
+        console.debug("[realtime] dropped invalid MARKET_PRICE payload");
+      }
+    });
+    return () => {
+      socket.disconnect();
+      stop();
+      batcher.dispose();
+      marketPriceStore.dispose();
+      document.removeEventListener("visibilitychange", visibility);
+    };
   }, [listeners]);
   return <Context.Provider value={listeners}><StatusContext.Provider value={status}><MotionConfig reducedMotion="user">{children}</MotionConfig></StatusContext.Provider></Context.Provider>;
 }
 
 export function useRealtimeStatus(): SocketStatus {
   return useContext(StatusContext);
+}
+
+export function useProvisionalPrice(onChainMarketId: string | null | undefined): ProvisionalPrice | null {
+  const [provisional, setProvisional] = useState<ProvisionalPrice | null>(() => {
+    return onChainMarketId ? marketPriceStore.getProvisionalPrice(onChainMarketId) ?? null : null;
+  });
+
+  useEffect(() => {
+    if (!onChainMarketId) {
+      setProvisional(null);
+      return;
+    }
+    setProvisional(marketPriceStore.getProvisionalPrice(onChainMarketId) ?? null);
+    const unsub = marketPriceStore.subscribePrice((updated) => {
+      if (updated.onChainMarketId === onChainMarketId) {
+        setProvisional(updated);
+      }
+    });
+    return unsub;
+  }, [onChainMarketId]);
+
+  return provisional;
 }
 
 export function useRealtimeBatch(handler: Listener) {
