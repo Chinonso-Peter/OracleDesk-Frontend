@@ -104,8 +104,9 @@ function formatValue(name: string, type: string, raw: string): string {
   return raw;
 }
 
-function contractDisplay(contractId: string): string {
+export function contractDisplay(contractId: string): string {
   if (contractId === CONTRACTS.marketCore) return "Market core";
+  if (contractId === CONTRACTS.treasury) return "Treasury";
   if (contractId === CONTRACTS.usdc) return "USDC token (Stellar Asset Contract)";
   return "Contract";
 }
