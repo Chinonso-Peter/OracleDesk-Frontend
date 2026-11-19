@@ -18,6 +18,34 @@ export interface MarketPricePayload {
   ts: number;
 }
 
+export interface CopyTradeConfirmedEvent {
+  copyTradeId: string;
+  txHash: string;
+  status: "CONFIRMED" | "EXECUTED";
+  amountRaw?: string;
+  confirmedAt?: string;
+}
+
+export interface PaymentConfirmedEvent {
+  txHash: string;
+  paymentId?: string;
+  status: "CONFIRMED" | "VERIFIED";
+  amountRaw: string;
+  confirmedAt?: string;
+  expiresAt?: string;
+}
+
+export interface PassExpiringEvent {
+  passId?: string;
+  expiresAt: string;
+  remainingMinutes?: number;
+}
+
+export type PrivateRealtimeEvent =
+  | { type: "COPY_TRADE_CONFIRMED"; payload: CopyTradeConfirmedEvent; receivedAt: number }
+  | { type: "PAYMENT_CONFIRMED"; payload: PaymentConfirmedEvent; receivedAt: number }
+  | { type: "PASS_EXPIRING"; payload: PassExpiringEvent; receivedAt: number };
+
 export type RealtimeEvent =
   | { type: "TRADE_EXECUTED"; payload: TradeEvent; receivedAt: number }
   | { type: "REASONING_PUBLISHED"; payload: TraceEvent; receivedAt: number }
@@ -84,4 +112,74 @@ export function isTraceEvent(v: unknown): v is TraceEvent {
     typeof v.action === "string" && v.action.length > 0 && v.action.length < 200 &&
     (v.traceId === null || typeof v.traceId === "string") && isHash(v.txHash) && isLedger(v.ledger) && validTime(v.closedAt);
 }
+
+const MIN_VALID_DATE_MS = Date.UTC(2020, 0, 1);
+const MAX_VALID_DATE_MS = Date.UTC(2100, 0, 1);
+
+function isBoundedString(v: unknown, maxLen = 128): v is string {
+  return typeof v === "string" && v.length > 0 && v.length <= maxLen;
+}
+
+function isBoundedIsoDate(v: unknown): v is string {
+  if (typeof v !== "string" || v.length < 10 || v.length > 64) return false;
+  const ms = Date.parse(v);
+  return Number.isFinite(ms) && ms >= MIN_VALID_DATE_MS && ms <= MAX_VALID_DATE_MS;
+}
+
+function isOptionalBoundedIsoDate(v: unknown): v is string | undefined {
+  return v === undefined || isBoundedIsoDate(v);
+}
+
+/**
+ * Strict hand-written guard for COPY_TRADE_CONFIRMED private events.
+ * Rejects unknown shapes, non-string ids, bad statuses, malformed amounts, and out-of-range dates.
+ */
+export function isCopyTradeConfirmedEvent(v: unknown): v is CopyTradeConfirmedEvent {
+  if (!object(v)) return false;
+  if (!isBoundedString(v.copyTradeId)) return false;
+  if (!isHash(v.txHash)) return false;
+  if (v.status !== "CONFIRMED" && v.status !== "EXECUTED") return false;
+  if (v.amountRaw !== undefined && !isRaw(v.amountRaw)) return false;
+  if (!isOptionalBoundedIsoDate(v.confirmedAt)) return false;
+  return true;
+}
+
+/**
+ * Strict hand-written guard for PAYMENT_CONFIRMED private events.
+ */
+export function isPaymentConfirmedEvent(v: unknown): v is PaymentConfirmedEvent {
+  if (!object(v)) return false;
+  if (!isHash(v.txHash)) return false;
+  if (v.paymentId !== undefined && !isBoundedString(v.paymentId)) return false;
+  if (v.status !== "CONFIRMED" && v.status !== "VERIFIED") return false;
+  if (!isRaw(v.amountRaw)) return false;
+  if (!isOptionalBoundedIsoDate(v.confirmedAt)) return false;
+  if (!isOptionalBoundedIsoDate(v.expiresAt)) return false;
+  return true;
+}
+
+/**
+ * Strict hand-written guard for PASS_EXPIRING private events.
+ */
+export function isPassExpiringEvent(v: unknown): v is PassExpiringEvent {
+  if (!object(v)) return false;
+  if (!isBoundedIsoDate(v.expiresAt)) return false;
+  if (v.passId !== undefined && !isBoundedString(v.passId)) return false;
+  if (
+    v.remainingMinutes !== undefined &&
+    (typeof v.remainingMinutes !== "number" || !Number.isFinite(v.remainingMinutes) || v.remainingMinutes < 0 || v.remainingMinutes > 60 * 24 * 365)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/** Redacted summary of a dropped private payload (keys only, never raw values/tokens/addresses). */
+export function redactPayloadForLog(payload: unknown): { kind: string; keys?: string[] } {
+  if (payload === null) return { kind: "null" };
+  if (Array.isArray(payload)) return { kind: "array" };
+  if (typeof payload !== "object") return { kind: typeof payload };
+  return { kind: "object", keys: Object.keys(payload as Record<string, unknown>).slice(0, 16) };
+}
+
 export const eventKey = (event: RealtimeEvent) => event.type === "TRADE_EXECUTED" ? `trade:${event.payload.eventId}` : `trace:${event.payload.onChainTraceId}`;

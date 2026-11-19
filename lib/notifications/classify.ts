@@ -2,7 +2,7 @@ import { NETWORK_PASSPHRASE } from "@/lib/stellar/config";
 import type { Position } from "@/lib/stellar/generated/market-core";
 import type { ChainEvent } from "@/lib/stellar/events";
 import type { TrackedTx } from "@/lib/stellar/tx-tracker-core";
-import { isTradeEvent, isTraceEvent, isRaw, isHash } from "@/lib/realtime/types";
+import { isTradeEvent, isTraceEvent, isPassExpiringEvent, isRaw, isHash } from "@/lib/realtime/types";
 import type { InboxItem } from "./store";
 
 const base = (owner: string, kind: InboxItem["kind"], id: string, createdAt: number): InboxItem => ({ owner, network: NETWORK_PASSPHRASE, kind, id: `${kind}:${id}`, createdAt, readAt: null, data: {} });
@@ -39,4 +39,15 @@ export function classifyTracked(tx: TrackedTx, owner: string): InboxItem | null 
   const kind = tx.state === "pending" ? "tx-pending" : "tx-failed";
   return { ...base(owner, kind, tx.hash, tx.submittedAt), txHash: tx.hash, marketId: tx.marketId, ledger: tx.ledger,
     data: { action: tx.kind, message: tx.error?.message ?? (tx.state === "expired" ? "Transaction expired" : "Awaiting confirmation") } };
+}
+export function classifyPassExpiring(payload: unknown, owner: string, receivedAt = Date.now()): InboxItem | null {
+  if (!isPassExpiringEvent(payload)) return null;
+  const id = payload.passId ? `${payload.passId}:${payload.expiresAt}` : payload.expiresAt;
+  return {
+    ...base(owner, "pass-expiring", id, receivedAt),
+    data: {
+      expiresAt: payload.expiresAt,
+      ...(payload.remainingMinutes !== undefined ? { remainingMinutes: String(payload.remainingMinutes) } : {}),
+    },
+  };
 }
