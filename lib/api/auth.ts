@@ -9,9 +9,9 @@ import {
   setCsrfToken,
   storeAuthSession,
   isAuthError,
+  replaceToken,
 } from "./client";
 import { validateSEP10Challenge, type SEP10ValidationError } from "@/lib/stellar/sep10-validator";
-import { isTokenExpired, getTokenTTL, getReAuthPromise, setReAuthPromise, isReAuthInFlight, waitForReAuth } from "./jwt-manager";
 import { broadcastSessionChange } from "./cross-tab-sync";
 import { TransactionBuilder } from "@stellar/stellar-sdk";
 import { NETWORK_PASSPHRASE } from "@/lib/stellar/config";
@@ -216,54 +216,19 @@ export async function signInWithWallet(
 }
 
 /**
- * Check if stored JWT is expired and needs refresh.
- * Useful for preemptive re-auth before making API calls.
+ * Refresh a still-valid bearer token via `POST /auth/refresh` (issue #269).
+ * The new token is adopted only if the same wallet and session are still
+ * current, so a refresh never resets the user scope.
  */
-export function isStoredTokenExpired(): boolean {
-  const token = getStoredToken();
-  return !token || isTokenExpired(token);
-}
-
-/**
- * Get TTL of stored JWT (time until expiry in milliseconds).
- * Returns 0 if token is invalid or expired.
- */
-export function getStoredTokenTTL(): number {
-  const token = getStoredToken();
-  return token ? getTokenTTL(token) : 0;
-}
-
-/**
- * Single-flight re-authentication: ensures only one re-auth request is in flight.
- * Subsequent calls wait for the first one to complete instead of spawning new requests.
- *
- * This prevents the "thundering herd" problem when many API calls fail with 401
- * simultaneously and all try to re-auth at once.
- */
-export async function ensureAuthWithSingleFlight(
-  address: string,
-  signTransaction: (xdr: string, networkPassphrase: string) => Promise<string>,
-): Promise<AuthSession> {
-  // Check if re-auth is already in flight
-  if (isReAuthInFlight()) {
-    await waitForReAuth();
-    // After waiting, return the current session (it may still fail if re-auth failed)
-    const token = getStoredToken();
-    const wallet = getStoredSessionWallet();
-    if (!token || !wallet) throw new Error("Re-authentication failed");
-    return { token: token ?? "", userId: "", walletAddress: wallet };
-  }
-
-  // Start new re-auth attempt
-  const reAuthPromise = signInWithWallet(address, signTransaction);
-  setReAuthPromise(reAuthPromise.then(() => undefined));
-
+export async function refreshSession(
+  expected: { wallet: string; sessionId: string; token: string },
+): Promise<"refreshed" | "stale" | "rejected"> {
+  if (getStoredToken() !== expected.token || getStoredSessionWallet() !== expected.wallet) return "stale";
   try {
-    const session = await reAuthPromise;
-    setReAuthPromise(null);
-    return session;
+    const { data } = await apiClient.post<{ token: string; userId: string; walletAddress: string }>("/auth/refresh");
+    return replaceToken(data, expected.sessionId) ? "refreshed" : "stale";
   } catch (error) {
-    setReAuthPromise(null);
+    if (isAuthError(error)) return "rejected";
     throw error;
   }
 }
