@@ -1,5 +1,6 @@
 import { apiClient, apiPath, type ApiRequestOptions } from "./client";
 import { assertValid, parseTxHash, parseUuid } from "@/lib/validation/ids";
+import { CopyTradeInitSchema } from "./schemas";
 
 /** What the wallet must sign to copy a trace: market_core.buy. */
 export interface CopyTradePayload {
@@ -35,7 +36,7 @@ export async function initiateCopyTrade(params: InitiateCopyTradeParams, options
     copyTradeId: string;
     transactionPayload: CopyTradePayload;
     instructions: string;
-  }>("/trade/copy", params, { "Idempotency-Key": crypto.randomUUID() }, options);
+  }>("/trade/copy", params, { "Idempotency-Key": crypto.randomUUID() }, { ...options, schema: CopyTradeInitSchema });
 
   return data;
 }

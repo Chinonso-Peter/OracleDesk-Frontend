@@ -9,6 +9,10 @@ import type { RealtimeEvent } from "./types";
 import { isMarketPricePayload } from "./types";
 import { marketPriceStore, type ProvisionalPrice } from "./market-price-store";
 import { parseReasoningPublished, parseTradeExecuted } from "@/lib/validation/events";
+import { REALTIME_CHANNEL, REALTIME_LEADER_LOCK, runWhileLeader, type RelayMessage } from "./leader";
+
+const RELAY_EVENTS = ["TRADE_EXECUTED", "REASONING_PUBLISHED"] as const;
+type RelayEventName = (typeof RELAY_EVENTS)[number];
 
 type Listener = (batch: Batch<RealtimeEvent>) => void;
 const Context = createContext<Set<Listener> | null>(null);

@@ -312,7 +312,7 @@ async function request<T>(
   path: string,
   init: RequestInit = {},
   params?: QueryParams,
-  options: ApiRequestOptions = {},
+  options: SchemaOptions<T> = {},
 ): Promise<ApiResponse<T>> {
   const assertScope = () => {
     const expected = options.expectScope;
@@ -411,10 +411,23 @@ async function request<T>(
     );
   }
 
-  return {
-    data: envelope?.data as T,
-    meta: envelope?.meta,
-  };
+  const schema = options.schema;
+  if (!schema) {
+    return {
+      data: envelope?.data as T,
+      meta: envelope?.meta,
+    };
+  }
+  if (!envelope || typeof envelope !== "object") {
+    throw new ApiError({ code: "INVALID_RESPONSE", message: "The server returned a response that is not JSON." }, response.status);
+  }
+  const parsed = schema.safeParse(envelope.data);
+  if (!parsed.success) {
+    // Paths and messages only: response values can hold tokens or user data.
+    const issues = parsed.error.issues.map((issue) => ({ path: issue.path.map(String).join("."), message: issue.message }));
+    throw new ApiError({ code: "INVALID_RESPONSE", message: "The server returned data in an unexpected shape.", details: issues }, response.status);
+  }
+  return { data: parsed.data, meta: envelope.meta };
 }
 
 /**
@@ -429,11 +442,11 @@ export function isAuthError(error: unknown): boolean {
 }
 
 export const apiClient = {
-  get<T>(path: string, params?: QueryParams, options?: ApiRequestOptions) {
+  get<T>(path: string, params?: QueryParams, options?: SchemaOptions<T>) {
     return request<T>(path, { method: "GET" }, params, options);
   },
 
-  post<T>(path: string, body?: unknown, headers?: HeadersInit, options?: ApiRequestOptions) {
+  post<T>(path: string, body?: unknown, headers?: HeadersInit, options?: SchemaOptions<T>) {
     return request<T>(path, {
       method: "POST",
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -448,7 +461,7 @@ export const apiClient = {
     }, undefined, options);
   },
 
-  patch<T>(path: string, body?: unknown, headers?: HeadersInit, options?: ApiRequestOptions) {
+  patch<T>(path: string, body?: unknown, headers?: HeadersInit, options?: SchemaOptions<T>) {
     return request<T>(path, {
       method: "PATCH",
       body: body === undefined ? undefined : JSON.stringify(body),

@@ -18,6 +18,7 @@ import { NETWORK_PASSPHRASE } from "@/lib/stellar/config";
 import { NetworkMismatchError } from "@/lib/stellar/network-check";
 import { sha256Hex } from "@/lib/stellar/trace";
 import { withOperation } from "@/lib/observability/tracing";
+import { AuthChallengeSchema } from "./schemas";
 
 export interface AuthSession {
   token?: string;
@@ -49,7 +50,7 @@ export interface AuthChallenge {
 }
 
 export async function requestChallenge(address: string, options?: ApiRequestOptions) {
-  const { data } = await apiClient.post<AuthChallenge>("/auth/challenge", { address }, undefined, options);
+  const { data } = await apiClient.post<AuthChallenge>("/auth/challenge", { address }, undefined, { ...options, schema: AuthChallengeSchema });
   return data;
 }
 
