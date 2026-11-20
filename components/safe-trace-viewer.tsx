@@ -200,7 +200,7 @@ export function SafeTraceViewer({
               >
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <span className="font-body-md font-semibold text-on-surface truncate pr-2">
+                    <span className="font-body-md font-semibold text-on-surface truncate pe-2">
                       {source.name}
                     </span>
                     <span className="font-data-mono text-xs font-bold text-primary">
@@ -266,7 +266,7 @@ export function SafeTraceViewer({
           <button
             type="button"
             onClick={() => setShowRaw(!showRaw)}
-            className="w-full flex items-center justify-between text-left font-label-caps text-xs text-on-surface-variant hover:text-on-surface transition-colors"
+            className="w-full flex items-center justify-between text-start font-label-caps text-xs text-on-surface-variant hover:text-on-surface transition-colors"
           >
             <span className="flex items-center gap-2">
               <Icon name="code" className="text-sm" />

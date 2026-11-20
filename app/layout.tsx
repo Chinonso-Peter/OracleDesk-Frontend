@@ -14,6 +14,8 @@ import { NetworkConsistencyBanner } from "@/components/layout/NetworkConsistency
 import { BuildIdentityBanner } from "@/components/layout/BuildIdentityBanner";
 import { CopyTradeReconciler } from "@/components/copy-trade/CopyTradeReconciler";
 import { ViewedAddressProvider } from "@/lib/hooks/useViewedAddress";
+import { DirectionProvider } from "@/components/layout/DirectionProvider";
+import { dirForLocale, type Dir } from "@/lib/i18n/direction";
 import { WebVitals } from "@/app/web-vitals";
 import { ErrorReportingInit } from "@/components/observability/ErrorReportingInit";
 import { ConsentBanner } from "@/components/consent-banner";
@@ -56,15 +58,19 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const forcedDir = process.env.NEXT_PUBLIC_FORCE_DIR;
+  const dir: Dir = forcedDir === "rtl" || forcedDir === "ltr" ? forcedDir : dirForLocale("en");
   return (
     <html
       lang="en"
+      dir={dir}
       className={`${geistSans.variable} ${geistMono.variable} ${inter.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col font-body-md text-on-surface">
+        <DirectionProvider dir={dir}>
         <a
           href="#main-content"
-          className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-primary focus:text-primary-foreground focus:rounded-md focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-primary-foreground font-label-caps"
+          className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:start-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-primary focus:text-primary-foreground focus:rounded-md focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-primary-foreground font-label-caps"
         >
           Skip to main content
         </a>
@@ -93,6 +99,7 @@ export default function RootLayout({
           </ViewedAddressProvider>
         </WalletProvider>
         </PwaRegistrar>
+        </DirectionProvider>
       </body>
     </html>
   );

@@ -200,7 +200,7 @@ export function DiagnosticsPanel() {
           <p className="p-6 text-sm text-secondary">No discrepancies in the sampled markets (tolerance {tolerance} bps).</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
+            <table className="w-full text-start text-sm">
               <thead className="bg-surface-container-low text-on-surface-variant text-[11px] uppercase tracking-wide">
                 <tr>
                   <th className="px-4 py-2">Kind</th>
@@ -220,8 +220,8 @@ export function DiagnosticsPanel() {
                     <td className="px-4 py-2">{diff.chainValue ?? "—"}<SourceTag source="chain" /></td>
                     <td className="px-4 py-2">
                       {diff.backendValue ?? "—"}<SourceTag source="backend" />
-                      {diff.seedOnly && <span className="ml-1 text-[10px] text-on-surface-variant">(seed only)</span>}
-                      {diff.deltaBps !== undefined && <span className="ml-1 text-[10px] text-tertiary">Δ{diff.deltaBps} bps</span>}
+                      {diff.seedOnly && <span className="ms-1 text-[10px] text-on-surface-variant">(seed only)</span>}
+                      {diff.deltaBps !== undefined && <span className="ms-1 text-[10px] text-tertiary">Δ{diff.deltaBps} bps</span>}
                     </td>
                     <td className="px-4 py-2">
                       <Link href={diffLink(diff)} className="underline text-primary">Open</Link>

@@ -8,11 +8,12 @@ import {
   verifyResolutionCommitment,
   type ResolutionVerificationResult,
 } from "@/lib/stellar/resolution-spec";
+import { ResolutionDeadlineCard } from "@/components/market/resolution-deadline-card";
 
 const SourceTag = ({ source }: { source: "chain" | "backend" }) => (
   <span
     title={source === "chain" ? "Read live from the market contract" : "OracleDesk backend estimate; may lag the chain"}
-    className={`ml-1 text-[9px] font-bold uppercase px-1 rounded ${
+    className={`ms-1 text-[9px] font-bold uppercase px-1 rounded ${
       source === "chain"
         ? "bg-secondary-container text-on-secondary-container"
         : "bg-surface-container-highest text-on-surface-variant"
@@ -23,7 +24,16 @@ const SourceTag = ({ source }: { source: "chain" | "backend" }) => (
 );
 
 export interface ResolverStatusPanelProps {
-  resolverState?: "Unconfigured" | "SignersPending" | "Finalized" | string;
+  onChainMarketId?: bigint | string | null;
+  resolverState?:
+    | "Unconfigured"
+    | "SignersPending"
+    | "Finalized"
+    | "Expired"
+    | "Disputed"
+    | "HybridPricePending"
+    | "HybridFallbackOpen"
+    | string;
   marketStatus?: string;
   resolutionHash?: Buffer | Uint8Array | string | null;
   resolutionSpec?: ResolutionSpec | null;
@@ -31,6 +41,7 @@ export interface ResolverStatusPanelProps {
 }
 
 export function ResolverStatusPanel({
+  onChainMarketId,
   resolverState = "Unconfigured",
   marketStatus,
   resolutionHash,
@@ -59,19 +70,19 @@ export function ResolverStatusPanel({
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full p-4 flex items-center justify-between bg-surface-container-low hover:bg-surface-container transition-colors text-left"
+        className="w-full p-4 flex items-center justify-between bg-surface-container-low hover:bg-surface-container transition-colors text-start"
       >
         <div className="flex items-center gap-2">
           <Icon name="policy" className="text-primary text-base" />
           <h3 className="font-headline-sm text-headline-sm text-on-surface">Market Resolution & Commitment</h3>
           {verification?.status === "verified" && (
-            <span className="ml-2 inline-flex items-center gap-1 text-[10px] font-bold text-secondary bg-secondary/10 px-2 py-0.5 rounded border border-secondary/20">
+            <span className="ms-2 inline-flex items-center gap-1 text-[10px] font-bold text-secondary bg-secondary/10 px-2 py-0.5 rounded border border-secondary/20">
               <Icon name="verified" filled className="text-[13px]" />
               Commitment Verified
             </span>
           )}
           {verification?.status === "mismatch" && (
-            <span className="ml-2 inline-flex items-center gap-1 text-[10px] font-bold text-error bg-error/15 px-2 py-0.5 rounded border border-error animate-pulse">
+            <span className="ms-2 inline-flex items-center gap-1 text-[10px] font-bold text-error bg-error/15 px-2 py-0.5 rounded border border-error animate-pulse">
               <Icon name="error" className="text-[13px]" />
               Spec Hash Mismatch
             </span>
@@ -105,6 +116,8 @@ export function ResolverStatusPanel({
               </div>
             )}
           </div>
+
+          <ResolutionDeadlineCard onChainMarketId={onChainMarketId} />
 
           {/* Revealed Spec in Plain Words */}
           <div className="p-4 bg-surface-container-lowest rounded-lg border border-outline-variant">

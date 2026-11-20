@@ -10,7 +10,14 @@ import type { ContractKey } from "@/lib/stellar/contract-check";
 import { Keypair, scValToNative, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import type { AssembledTransaction } from "@stellar/stellar-sdk/contract";
 import { useWallet } from "@/lib/contexts/WalletContext";
-import { marketCore, reasoningRegistry, token, Outcomes, type OutcomeTag, type Signer } from "@/lib/stellar/clients";
+import { marketCore, reasoningRegistry, resolver, token, Outcomes, type OutcomeTag, type Signer } from "@/lib/stellar/clients";
+import {
+  previewExpire,
+  previewOpenFallback,
+  readDeadline,
+  supportsExpiryAndFallback,
+  type ExpiryEffect,
+} from "@/lib/stellar/resolution-deadline";
 import { describeError, UserFacingError, type ContractName } from "@/lib/stellar/errors";
 import { priceYesBps } from "@/lib/stellar/generated/fpmm";
 import type { Market as OnChainMarket, Position } from "@/lib/stellar/generated/market-core";
@@ -1328,6 +1335,136 @@ export function useClaimPoolRemainder() {
       });
     },
     onSuccess: (data, variables) => invalidate(String(variables.marketId), data.holder),
+  });
+  return { ...mutation, phase: runner.phase };
+}
+
+export function useResolutionDeadline(marketId: bigint | string | null | undefined) {
+  const id = marketId !== null && marketId !== undefined ? String(marketId) : "";
+  return useQuery({
+    queryKey: ["stellar", "resolver", "deadline", id] as const,
+    enabled: Boolean(id) && supportsExpiryAndFallback(),
+    queryFn: () => readDeadline(toId(id)),
+    staleTime: 15_000,
+  });
+}
+
+export function useExpiryPreview(
+  marketId: bigint | string | null | undefined,
+  mode: "expire" | "fallback",
+  enabled: boolean,
+) {
+  const { address } = useWallet();
+  const ledger = useLedgerNow();
+  const id = marketId !== null && marketId !== undefined ? String(marketId) : "";
+  const ledgerBucket = ledger.ledger !== null ? Math.floor(ledger.ledger / 12) : 0;
+  return useQuery({
+    queryKey: ["stellar", "resolver", "expiryPreview", id, mode, ledgerBucket] as const,
+    enabled: Boolean(id) && Boolean(address) && enabled && supportsExpiryAndFallback(),
+    queryFn: () =>
+      mode === "expire"
+        ? previewExpire(toId(id), address!)
+        : previewOpenFallback(toId(id), address!),
+    staleTime: 15_000,
+  });
+}
+
+function effectsEqual(a: ExpiryEffect, b: ExpiryEffect): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "resolve" && b.kind === "resolve") return a.outcome === b.outcome;
+  return true;
+}
+
+export function useExpireMarket() {
+  const guard = useWriteGuard();
+  const queryClient = useQueryClient();
+  const runner = useTxRunner("resolver");
+  const mutation = useMutation({
+    mutationFn: async ({
+      marketId,
+      expectedEffect,
+    }: {
+      marketId: bigint | string;
+      expectedEffect: ExpiryEffect;
+    }) => {
+      const signer = guard("resolver");
+      const id = toId(marketId);
+      return runQueuedWrite(
+        signer,
+        `Expire market #${marketId}`,
+        dedupeValue("expire", marketId),
+        guard,
+        async () => {
+          const fresh = await previewExpire(id, signer.publicKey);
+          if (!fresh.ok) {
+            throw new UserFacingError({ kind: "contract", code: fresh.reason, message: fresh.detail });
+          }
+          if (!effectsEqual(fresh.effect, expectedEffect)) {
+            throw new UserFacingError({
+              kind: "contract",
+              message: "The simulated expiry outcome changed before signing. Please review and try again.",
+            });
+          }
+          const tx = await resolver(signer).expire_market({ market_id: id });
+          const { txHash } = await runner.start(tx, () => undefined);
+          return { txHash, effect: fresh.effect, holder: signer.publicKey };
+        },
+      );
+    },
+    onSuccess: (_data, variables) => {
+      const id = String(variables.marketId);
+      void queryClient.invalidateQueries({ queryKey: stellarKeys.market(id) });
+      void queryClient.invalidateQueries({ queryKey: ["stellar", "position", id] });
+      void queryClient.invalidateQueries({ queryKey: ["stellar", "resolver"] });
+      void queryClient.invalidateQueries({ queryKey: ["stellar", "myPositions"] });
+    },
+  });
+  return { ...mutation, phase: runner.phase };
+}
+
+export function useOpenFallback() {
+  const guard = useWriteGuard();
+  const queryClient = useQueryClient();
+  const runner = useTxRunner("resolver");
+  const mutation = useMutation({
+    mutationFn: async ({
+      marketId,
+      expectedEffect,
+    }: {
+      marketId: bigint | string;
+      expectedEffect: ExpiryEffect;
+    }) => {
+      const signer = guard("resolver");
+      const id = toId(marketId);
+      return runQueuedWrite(
+        signer,
+        `Open fallback #${marketId}`,
+        dedupeValue("open-fallback", marketId),
+        guard,
+        async () => {
+          const fresh = await previewOpenFallback(id, signer.publicKey);
+          if (!fresh.ok) {
+            throw new UserFacingError({ kind: "contract", code: fresh.reason, message: fresh.detail });
+          }
+          if (!effectsEqual(fresh.effect, expectedEffect)) {
+            throw new UserFacingError({
+              kind: "contract",
+              message: "The simulated fallback outcome changed before signing. Please review and try again.",
+            });
+          }
+          const tx = await resolver(signer).open_fallback({ market_id: id });
+          const { txHash } = await runner.start(tx, () => undefined);
+          return { txHash, effect: fresh.effect, holder: signer.publicKey };
+        },
+      );
+    },
+    onSuccess: (_data, variables) => {
+      const id = String(variables.marketId);
+      void queryClient.invalidateQueries({ queryKey: stellarKeys.market(id) });
+      void queryClient.invalidateQueries({ queryKey: ["stellar", "position", id] });
+      void queryClient.invalidateQueries({ queryKey: ["stellar", "resolver"] });
+      void queryClient.invalidateQueries({ queryKey: ["stellar", "myPositions"] });
+    },
   });
   return { ...mutation, phase: runner.phase };
 }
