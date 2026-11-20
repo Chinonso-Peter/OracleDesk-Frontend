@@ -1,4 +1,4 @@
-export type InboxKind = "fill" | "redeemable" | "redeemed" | "trace" | "tx-failed" | "tx-pending";
+export type InboxKind = "fill" | "redeemable" | "redeemed" | "trace" | "tx-failed" | "tx-pending" | "pass-expiring";
 export interface InboxItem {
   id: string; owner: string; network: string; kind: InboxKind; marketId?: string; txHash?: string; ledger?: number;
   createdAt: number; readAt: number | null; data: Record<string, string>;

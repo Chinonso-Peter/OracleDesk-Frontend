@@ -75,7 +75,7 @@ const MarketPriceSection = () => {
   const searchParams = useSearchParams();
   const onChainId = searchParams.get("onChainId");
   const { points } = usePriceHistory(onChainId);
-  return <PriceChart points={points} />;
+  return <PriceChart points={points} onChainMarketId={onChainId} />;
 };
 
 const MarketPriceSkeleton = () => (

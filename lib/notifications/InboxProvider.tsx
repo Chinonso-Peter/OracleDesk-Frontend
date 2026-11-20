@@ -10,8 +10,8 @@ import { read } from "@/lib/stellar/typed-call";
 import { decodeEvent, eventTopicFilter, fetchEventRange, type ChainEvent } from "@/lib/stellar/events";
 import type { Position } from "@/lib/stellar/generated/market-core";
 import type { Stamped } from "@/lib/stellar/optimistic";
-import { useRealtimeBatch } from "@/lib/realtime/RealtimeProvider";
-import { classifyTrade, classifyTrace, classifyResolved, classifyRedeemed, classifyTracked } from "./classify";
+import { usePrivateRealtimeEvents, useRealtimeBatch } from "@/lib/realtime/RealtimeProvider";
+import { classifyTrade, classifyTrace, classifyResolved, classifyRedeemed, classifyTracked, classifyPassExpiring } from "./classify";
 import { openInbox, type Inbox, type InboxItem } from "./store";
 
 interface InboxView {
@@ -88,6 +88,20 @@ function ConnectedInbox({ owner, children }: { owner: string; children: ReactNod
       await inbox.setMeta("knownMarkets", JSON.stringify([...known.current]));
       await refresh(inbox);
     });
+  });
+
+  usePrivateRealtimeEvents((event, eventOwner) => {
+    if (eventOwner !== owner) return;
+    if (event.type === "PASS_EXPIRING") {
+      const item = classifyPassExpiring(event.payload, owner, event.receivedAt);
+      if (item) {
+        void enqueue(async inbox => {
+          await inbox.put([item]);
+          await inbox.prune(500);
+          await refresh(inbox);
+        });
+      }
+    }
   });
 
   const recordTransactions = useEffectEvent(() => {

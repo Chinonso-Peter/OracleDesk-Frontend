@@ -23,6 +23,19 @@ export function onAuthInvalid(listener: () => void) {
   return () => { authInvalidListeners.delete(listener); };
 }
 
+/**
+ * Clears the current auth session and notifies `onAuthInvalid` listeners,
+ * guarded so a stale failure (e.g. from an older socket connection) cannot
+ * clear a newer session.
+ */
+export function notifyAuthInvalid(expectedSessionId?: string | null, expectedToken?: string | null): boolean {
+  const currentSessionId = getStoredSessionId();
+  const currentToken = getStoredToken();
+  if (expectedSessionId !== undefined && expectedSessionId !== currentSessionId) return false;
+  if (expectedToken !== undefined && SESSION_MODE !== "cookie" && expectedToken !== currentToken) return false;
+  clearAuthSession();
+  authInvalidListeners.forEach((listener) => listener());
+  return true;
 export type StepUpPromptHandler = (details: { maxAgeSeconds?: number; reauthenticate?: boolean }) => Promise<boolean>;
 let stepUpHandler: StepUpPromptHandler | null = null;
 
