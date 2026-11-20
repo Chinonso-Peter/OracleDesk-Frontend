@@ -9,6 +9,7 @@ import PriceChart from "@/components/charts/price-chart";
 import { usePriceHistory } from "@/lib/hooks/usePriceHistory";
 import { DepthChart } from "@/components/charts/depth-chart";
 import { DemoBadge } from "@/components/ui/demo-badge";
+import { SafeText } from "@/components/safe-text";
 // Issue #231: lazy-load committee panel for markets using ResolutionSpec::Committee
 import dynamic from "next/dynamic";
 const CommitteePanel = dynamic(() => import("@/components/market/committee-panel").then((m) => ({ default: m.CommitteePanel })), { ssr: false, loading: () => null });
@@ -22,7 +23,9 @@ const MarketHeader = () => {
             <span className="px-2 py-0.5 bg-primary-container text-on-primary-container font-label-caps text-[10px] rounded">POLITICS</span>
             <span className="text-on-surface-variant font-data-mono text-label-caps">#MKT-9204</span>
           </div>
-          <h1 className="font-display-lg text-display-lg text-on-background max-w-3xl">Will the US Federal Reserve lower rates by 50bps in Q4?</h1>
+          <h1 className="font-display-lg text-display-lg text-on-background max-w-3xl">
+            <SafeText text="Will the US Federal Reserve lower rates by 50bps in Q4?" />
+          </h1>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-8 border-s border-outline-variant ps-8">
           <div>
@@ -72,7 +75,7 @@ const MarketPriceSection = () => {
   const searchParams = useSearchParams();
   const onChainId = searchParams.get("onChainId");
   const { points } = usePriceHistory(onChainId);
-  return <PriceChart points={points} />;
+  return <PriceChart points={points} onChainMarketId={onChainId} />;
 };
 
 const MarketPriceSkeleton = () => (

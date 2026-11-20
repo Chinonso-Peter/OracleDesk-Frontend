@@ -8,6 +8,7 @@ import { useWallet } from "@/lib/contexts/WalletContext";
 import { formatUsdcDisplay } from "@/lib/format/money";
 import { explorerTx, NETWORK_LABEL } from "@/lib/stellar/config";
 import { formatUsdc } from "@/lib/stellar/units";
+import { SafeText } from "@/components/safe-text";
 
 type Filter = "all" | "trades" | "redemptions" | "reasoning" | "transactions";
 const group = (item: InboxItem): Exclude<Filter, "all"> => item.kind === "fill" ? "trades" : item.kind === "trace" ? "reasoning" : item.kind === "redeemable" || item.kind === "redeemed" ? "redemptions" : "transactions";

@@ -17,6 +17,7 @@ import { BACKEND_CATEGORIES, BACKEND_CATEGORY_LABELS } from "@/lib/stellar/categ
 import { NETWORK_LABEL } from "@/lib/stellar/config";
 import { VirtualList } from "@/components/ui/virtual-list";
 import { QuestionVerificationBadge } from "@/components/question-verification-badge";
+import { SafeText } from "@/components/safe-text";
 import { bytesToHex } from "@/lib/stellar/typed-call";
 import { userMessage } from "@/lib/errors/display";
 
@@ -116,8 +117,16 @@ const MarketCard = ({ href, category, onChainMarketId, reasoningTraces, expiry, 
   const chain = useOnChainMarket(onChainMarketId);
   const view = chain.data;
   const fromChain = Boolean(view);
-  const yesProb = view ? Math.round(view.yesBps / 100) : backendYesProb ?? 50;
+  const provisional = useProvisionalPrice(onChainMarketId);
+  const baseYesBps = view ? view.yesBps : (backendYesProb !== null && backendYesProb !== undefined ? Math.round(backendYesProb * 100) : 5000);
+  const reconciled = reconcileDisplayPrice(baseYesBps, view?.ledger, provisional);
+  const yesProb = Math.round(reconciled.priceYesBps / 100);
   const noProb = 100 - yesProb;
+  const isProvisional = reconciled.isProvisional;
+  const priceSource: "chain" | "backend" | "provisional" = isProvisional ? "provisional" : fromChain ? "chain" : "backend";
+  const priceLedger = isProvisional ? reconciled.ledger : view?.ledger ?? null;
+  const priceReadAt = isProvisional ? provisional?.receivedAt : fromChain ? chain.dataUpdatedAt : undefined;
+
   const liquidity = view
     ? formatUsdcDisplay(view.market.sets_minted)
     : backendLiquidity ?? "—";
@@ -131,9 +140,15 @@ const MarketCard = ({ href, category, onChainMarketId, reasoningTraces, expiry, 
     marketId,
     onChainMarketId,
     displayedQuestion: title,
-    metaUri: view?.market.meta_uri ?? metaUri,
-    questionHash: view?.market.question_hash ?? questionHash,
+    metaUri: view?.market.meta_uri ?? null,
+    questionHash: view?.market.question_hash ?? null,
+    hasChainRead: fromChain,
+    chainMarket: view?.market,
   });
+
+  const displayTitle = questionIntegrity.data?.status === "verified" && questionIntegrity.data.committedQuestion
+    ? questionIntegrity.data.committedQuestion
+    : title;
 
   const cardContent = (
     <>
@@ -158,6 +173,7 @@ const MarketCard = ({ href, category, onChainMarketId, reasoningTraces, expiry, 
               <QuestionVerificationBadge
                 status={questionIntegrity.data.status}
                 result={questionIntegrity.data}
+                displayedText={title}
                 compact={true}
               />
             )}
@@ -167,19 +183,20 @@ const MarketCard = ({ href, category, onChainMarketId, reasoningTraces, expiry, 
 
         {questionIntegrity.data?.status === "mismatch" && (
           <div className="mb-3">
-            <QuestionVerificationBadge status="mismatch" result={questionIntegrity.data} />
+            <QuestionVerificationBadge status="mismatch" result={questionIntegrity.data} displayedText={title} />
           </div>
         )}
 
         <Link href={href} className="block">
           <h3 className="font-headline-sm text-headline-sm text-on-surface mb-6 group-hover:text-primary transition-colors line-clamp-3">
-            {title}
+            <SafeText text={title} />
+            {displayTitle}
           </h3>
         </Link>
         <div className="space-y-4">
           <div>
             <div className="flex justify-between text-label-caps font-label-caps mb-2">
-              <span className="text-secondary">YES {yesProb}%<SourceTag source={fromChain ? "chain" : "backend"} /></span>
+              <span className="text-secondary">YES {yesProb}%<SourceTag source={priceSource} ledger={priceLedger} readAt={priceReadAt} /></span>
               <span className="text-tertiary">NO {noProb}%</span>
             </div>
             <div className="w-full h-2 rounded-full bg-outline-variant overflow-hidden flex">

@@ -22,6 +22,7 @@
     "check:env": "node scripts/check-env-example.mjs",
     "check:sdk": "node scripts/check-sdk-major.mjs",
     "check:origins": "node scripts/check-external-origins.mjs",
+    "check:docs": "node scripts/check-doc-claims.mjs",
     "scan:secrets": "node scripts/scan-build-secrets.mjs",
     "install:allowed-scripts": "node scripts/run-allowed-install-scripts.mjs",
     "perf:lhci": "node scripts/run-lhci.mjs",

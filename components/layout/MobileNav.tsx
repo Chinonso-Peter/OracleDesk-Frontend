@@ -7,11 +7,13 @@ import { Dialog as D } from "radix-ui";
 import { Icon } from "@/components/ui/icon";
 import { NAV_ITEMS, isActive, activeHref } from "./nav-items";
 import { useWalletSession } from "@/lib/contexts/WalletContext";
+import { useAdminPermissions } from "@/lib/admin/useAdminPermissions";
 
 export function MobileNav() {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
   const { isConnecting } = useWalletSession();
+  const { can } = useAdminPermissions();
 
   // Expanded state for nested sections (default expanded for quick navigation)
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
@@ -82,7 +84,7 @@ export function MobileNav() {
               </div>
 
               <nav className="mt-6 space-y-2">
-                {NAV_ITEMS.map((item) => {
+                {NAV_ITEMS.filter((item) => !item.permission || can(item.permission)).map((item) => {
                   if (item.children) {
                     const isExpanded = expandedSections[item.label] ?? true;
                     return (

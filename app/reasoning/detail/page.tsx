@@ -7,6 +7,7 @@ import { useSearchParams } from "next/navigation";
 import { getTrace, type ReasoningTrace } from "@/lib/api/traces";
 import { fetchAndVerifyTrace } from "@/lib/stellar/trace";
 import { SafeTraceViewer } from "@/components/safe-trace-viewer";
+import { SafeText } from "@/components/safe-text";
 
 export default function ReasoningTraceDetailPage() {
   return (
@@ -83,7 +84,9 @@ function ReasoningTraceDetailContent() {
             {traceId ? `Trace Detail: ${traceId.slice(0, 12)}…` : "Reasoning Trace Detail"}
           </h1>
           {trace?.market?.question && (
-            <p className="font-body-md text-on-surface-variant mt-1">Market: {trace.market.question}</p>
+            <p className="font-body-md text-on-surface-variant mt-1">
+              Market: <SafeText text={trace.market.question} />
+            </p>
           )}
         </div>
 

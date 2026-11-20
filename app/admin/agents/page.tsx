@@ -6,7 +6,8 @@ import Link from "next/link";
 import { RequireWallet } from "@/components/require-wallet";
 import { useWalletAddress } from "@/lib/contexts/WalletContext";
 import { useAgents, useRegisterAgent, useRegistryAdmin, useUnregisterAgent, simulateAgentAction, type AgentAction, type AgentRow, type AgentSource } from "@/lib/hooks/useAgents";
-import { CONTRACTS, explorerAccount, explorerTx, isAdminAddress } from "@/lib/stellar/config";
+import { CONTRACTS, explorerAccount, explorerTx } from "@/lib/stellar/config";
+import { useAdminPermissions } from "@/lib/admin/useAdminPermissions";
 import { describeError } from "@/lib/stellar/errors";
 import { AddressInput } from "@/components/ui/address-input";
 import { knownAddresses } from "@/lib/stellar/address-book";
@@ -56,6 +57,7 @@ export default function AdminAgentsPage() {
 
 function AdminAgentsContent() {
   const { address } = useWalletAddress();
+  const { can, isLoading: isPermissionsLoading, isDevelopmentFallback } = useAdminPermissions();
   const agents = useAgents();
   const registryAdmin = useRegistryAdmin();
   const register = useRegisterAgent();
@@ -69,7 +71,8 @@ function AdminAgentsContent() {
   const [typed, setTyped] = useState("");
   const [txHash, setTxHash] = useState<string | null>(null);
 
-  const authorized = isAdminAddress(address);
+  const authorized = can("admin.read") || can("agents.manage");
+  const canManage = can("agents.manage");
   const rows = useMemo(() => agents.data?.rows ?? [], [agents.data?.rows]);
   const reviewRow = useMemo(() => rows.find((row) => row.address === review?.agent), [rows, review?.agent]);
   const adminHint = registryAdmin.data;
@@ -115,6 +118,10 @@ function AdminAgentsContent() {
       setError("Connect your wallet first.");
       return;
     }
+    if (!canManage) {
+      setError("Permission denied: You do not have agents.manage permission.");
+      return;
+    }
     if (notAdmin) {
       setError(`This wallet is not the registry admin (${adminHint}). Only the admin can register or unregister agents.`);
       return;
@@ -152,6 +159,12 @@ function AdminAgentsContent() {
 
   return (
     <main className="flex-grow max-w-container-max-width mx-auto px-gutter py-12 w-full space-y-8">
+      {isDevelopmentFallback && (
+        <div role="note" className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-700 text-xs flex items-center gap-2">
+          <Icon name="warning" className="text-sm" />
+          <span>DEVELOPMENT FALLBACK: Gated by local environment addresses, not real backend authorization. Never active in production.</span>
+        </div>
+      )}
       <div className="flex flex-col md:flex-row justify-between items-end gap-6">
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-on-surface-variant">

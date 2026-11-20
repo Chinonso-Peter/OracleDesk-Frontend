@@ -5,7 +5,13 @@ import { messageFor } from "@/lib/errors/messages";
 
 export { API_URL };
 
-export interface ApiRequestOptions { expectScope?: UserScope; signal?: AbortSignal; trace?: TraceCtx }
+export interface ApiRequestOptions {
+  expectScope?: UserScope;
+  signal?: AbortSignal;
+  trace?: TraceCtx;
+  /** Internal flag to prevent infinite loops when retrying after step-up auth. */
+  _stepUpRetried?: boolean;
+}
 const sessionListeners = new Set<() => void>();
 const authInvalidListeners = new Set<() => void>();
 export function onAuthSessionChanged(listener: () => void) {
@@ -15,6 +21,29 @@ export function onAuthSessionChanged(listener: () => void) {
 export function onAuthInvalid(listener: () => void) {
   authInvalidListeners.add(listener);
   return () => { authInvalidListeners.delete(listener); };
+}
+
+/**
+ * Clears the current auth session and notifies `onAuthInvalid` listeners,
+ * guarded so a stale failure (e.g. from an older socket connection) cannot
+ * clear a newer session.
+ */
+export function notifyAuthInvalid(expectedSessionId?: string | null, expectedToken?: string | null): boolean {
+  const currentSessionId = getStoredSessionId();
+  const currentToken = getStoredToken();
+  if (expectedSessionId !== undefined && expectedSessionId !== currentSessionId) return false;
+  if (expectedToken !== undefined && SESSION_MODE !== "cookie" && expectedToken !== currentToken) return false;
+  clearAuthSession();
+  authInvalidListeners.forEach((listener) => listener());
+  return true;
+export type StepUpPromptHandler = (details: { maxAgeSeconds?: number; reauthenticate?: boolean }) => Promise<boolean>;
+let stepUpHandler: StepUpPromptHandler | null = null;
+
+export function registerStepUpHandler(handler: StepUpPromptHandler | null) {
+  stepUpHandler = handler;
+  return () => {
+    if (stepUpHandler === handler) stepUpHandler = null;
+  };
 }
 
 export interface ApiErrorPayload {
@@ -249,6 +278,31 @@ export function storeAuthSession(session: {
   sessionListeners.forEach((listener) => listener());
 }
 
+const tokenRotatedListeners = new Set<() => void>();
+/** Fires when a refreshed token replaces the current one; the session id is unchanged. */
+export function onTokenRotated(listener: () => void) {
+  tokenRotatedListeners.add(listener);
+  return () => { tokenRotatedListeners.delete(listener); };
+}
+
+/**
+ * Swap in a refreshed bearer token (issue #269) without rotating the session id,
+ * so user-scoped caches survive. Refuses if the wallet or session changed meanwhile.
+ */
+export function replaceToken(
+  next: { token: string; userId: string; walletAddress: string },
+  expectedSessionId: string,
+): boolean {
+  if (SESSION_MODE === "cookie") return false;
+  const storage = getBrowserStorage();
+  if (!storage?.getItem(TOKEN_KEY)) return false;
+  if (storage.getItem(WALLET_KEY) !== next.walletAddress) return false;
+  if (storage.getItem(SESSION_KEY) !== expectedSessionId) return false;
+  storage.setItem(TOKEN_KEY, next.token);
+  tokenRotatedListeners.forEach((listener) => listener());
+  return true;
+}
+
 /** Wallet address the backend session belongs to, if any. */
 export function getStoredSessionWallet() {
   if (SESSION_MODE === "cookie") return confirmedSessionWallet;
@@ -271,7 +325,7 @@ async function request<T>(
   path: string,
   init: RequestInit = {},
   params?: QueryParams,
-  options: ApiRequestOptions = {},
+  options: SchemaOptions<T> = {},
 ): Promise<ApiResponse<T>> {
   const assertScope = () => {
     const expected = options.expectScope;
@@ -337,6 +391,16 @@ async function request<T>(
   assertScope();
 
   if (!response.ok || envelope?.ok === false) {
+    const isStepUp = response.status === 403 && (apiError?.code === "STEP_UP_REQUIRED" || (apiError?.details as any)?.reauthenticate === true);
+    if (isStepUp && !options._stepUpRetried && stepUpHandler) {
+      const stepUpDetails = (apiError?.details as { maxAgeSeconds?: number; reauthenticate?: boolean }) ?? { reauthenticate: true };
+      const confirmed = await stepUpHandler(stepUpDetails);
+      if (confirmed) {
+        // Re-execute request once with _stepUpRetried flag set to true
+        return request<T>(path, init, params, { ...options, _stepUpRetried: true });
+      }
+    }
+
     const authFailure = ["TOKEN_EXPIRED", "INVALID_TOKEN", "UNAUTHORIZED"].includes(apiError?.code ?? "") ||
       (response.status === 401 && !apiError);
     const sessionIsCurrent = requestSessionId === getStoredSessionId();
@@ -360,10 +424,23 @@ async function request<T>(
     );
   }
 
-  return {
-    data: envelope?.data as T,
-    meta: envelope?.meta,
-  };
+  const schema = options.schema;
+  if (!schema) {
+    return {
+      data: envelope?.data as T,
+      meta: envelope?.meta,
+    };
+  }
+  if (!envelope || typeof envelope !== "object") {
+    throw new ApiError({ code: "INVALID_RESPONSE", message: "The server returned a response that is not JSON." }, response.status);
+  }
+  const parsed = schema.safeParse(envelope.data);
+  if (!parsed.success) {
+    // Paths and messages only: response values can hold tokens or user data.
+    const issues = parsed.error.issues.map((issue) => ({ path: issue.path.map(String).join("."), message: issue.message }));
+    throw new ApiError({ code: "INVALID_RESPONSE", message: "The server returned data in an unexpected shape.", details: issues }, response.status);
+  }
+  return { data: parsed.data, meta: envelope.meta };
 }
 
 /**
@@ -378,11 +455,11 @@ export function isAuthError(error: unknown): boolean {
 }
 
 export const apiClient = {
-  get<T>(path: string, params?: QueryParams, options?: ApiRequestOptions) {
+  get<T>(path: string, params?: QueryParams, options?: SchemaOptions<T>) {
     return request<T>(path, { method: "GET" }, params, options);
   },
 
-  post<T>(path: string, body?: unknown, headers?: HeadersInit, options?: ApiRequestOptions) {
+  post<T>(path: string, body?: unknown, headers?: HeadersInit, options?: SchemaOptions<T>) {
     return request<T>(path, {
       method: "POST",
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -397,7 +474,7 @@ export const apiClient = {
     }, undefined, options);
   },
 
-  patch<T>(path: string, body?: unknown, headers?: HeadersInit, options?: ApiRequestOptions) {
+  patch<T>(path: string, body?: unknown, headers?: HeadersInit, options?: SchemaOptions<T>) {
     return request<T>(path, {
       method: "PATCH",
       body: body === undefined ? undefined : JSON.stringify(body),

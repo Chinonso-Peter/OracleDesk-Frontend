@@ -131,13 +131,20 @@ function MarketQuickViewContent() {
   const initialFocusRef = (onChainMarketId !== null && isOpen) ? amountInputRef : yesButtonRef;
 
   const title = market?.question ?? `Market #${onChainMarketId} · ${view?.market.meta_uri ?? ""}`;
+  const fromChain = Boolean(view?.market);
   const questionIntegrity = useMarketQuestionIntegrity({
     marketId,
     onChainMarketId,
     displayedQuestion: title,
-    metaUri: view?.market.meta_uri ?? market?.metaUri,
-    questionHash: view?.market.question_hash ?? market?.questionHash,
+    metaUri: view?.market.meta_uri ?? null,
+    questionHash: view?.market.question_hash ?? null,
+    hasChainRead: fromChain,
+    chainMarket: view?.market,
   });
+
+  const displayTitle = questionIntegrity.data?.status === "verified" && questionIntegrity.data.committedQuestion
+    ? questionIntegrity.data.committedQuestion
+    : title;
 
   const isLoading = backendById.isLoading || (backendByChainId.isLoading && !marketId) || (chain.isLoading && !market);
   const notFound = !market && !view;
@@ -257,22 +264,27 @@ function MarketQuickViewContent() {
           {/* Content Area */}
           <div className="p-6 space-y-6">
             {/* Market Question */}
-            <div className="space-y-2">
+            <div className="space-y-3">
               <div className="flex items-start justify-between gap-3">
                 <DialogTitle asChild>
                   <h2 className="font-headline-sm text-headline-sm text-on-surface leading-tight">
-                    {title}
+                    <SafeText text={title} />
+                    {displayTitle}
                   </h2>
                 </DialogTitle>
                 {questionIntegrity.data && (
                   <QuestionVerificationBadge
                     status={questionIntegrity.data.status}
                     result={questionIntegrity.data}
+                    displayedText={title}
                   />
                 )}
               </div>
               {questionIntegrity.data?.status === "mismatch" && (
-                <QuestionVerificationBadge status="mismatch" result={questionIntegrity.data} />
+                <QuestionVerificationBadge status="mismatch" result={questionIntegrity.data} displayedText={title} />
+              )}
+              {questionIntegrity.data && (
+                <VerifiedQuestionViewer check={questionIntegrity.data} />
               )}
             </div>
 

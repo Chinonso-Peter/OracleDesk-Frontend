@@ -91,6 +91,20 @@ function ConnectedInbox({ owner, children }: { owner: string; children: ReactNod
     });
   });
 
+  usePrivateRealtimeEvents((event, eventOwner) => {
+    if (eventOwner !== owner) return;
+    if (event.type === "PASS_EXPIRING") {
+      const item = classifyPassExpiring(event.payload, owner, event.receivedAt);
+      if (item) {
+        void enqueue(async inbox => {
+          await inbox.put([item]);
+          await inbox.prune(500);
+          await refresh(inbox);
+        });
+      }
+    }
+  });
+
   const recordTransactions = useEffectEvent(() => {
     const own = tracker.list.filter(tx => tx.holder === owner && tx.networkPassphrase === NETWORK_PASSPHRASE);
     void enqueue(async inbox => {

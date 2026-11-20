@@ -37,6 +37,14 @@ export interface ResolverStatusPanelProps {
   marketStatus?: string;
   resolutionHash?: Buffer | Uint8Array | string | null;
   resolutionSpec?: ResolutionSpec | null;
+  /**
+   * The resolution_hash committed on-chain in the market-core/resolver contract.
+   */
+  resolutionHash?: Buffer | Uint8Array | string | null;
+  /**
+   * Optional market status from market-core (e.g. "Active", "Resolving", "Resolved").
+   */
+  marketStatus?: string;
   className?: string;
 }
 
@@ -46,27 +54,27 @@ export function ResolverStatusPanel({
   marketStatus,
   resolutionHash,
   resolutionSpec,
+  resolutionHash,
+  marketStatus,
   className = "",
 }: ResolverStatusPanelProps) {
-  const [isOpen, setIsOpen] = useState(true);
+  const [isOpen, setIsOpen] = useState(false);
   const [verification, setVerification] = useState<ResolutionVerificationResult | null>(null);
 
   useEffect(() => {
-    let active = true;
     void verifyResolutionCommitment(resolutionSpec, resolutionHash).then((res) => {
-      if (active) setVerification(res);
+      setVerification(res);
     });
-    return () => {
-      active = false;
-    };
   }, [resolutionSpec, resolutionHash]);
 
+  const hashString = formatHashHex(resolutionHash);
   const formattedWords = formatResolutionSpec(resolutionSpec);
-  const hashString = verification?.onChainHash ?? "";
 
   return (
-    <div className={`rounded-xl border border-outline-variant bg-surface overflow-hidden ${className}`}>
-      {/* Collapsible Header */}
+    <div
+      className={`border border-outline-variant rounded-xl overflow-hidden bg-surface-container-lowest transition-all ${className}`}
+    >
+      {/* Header bar / Summary Toggle */}
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
@@ -88,6 +96,7 @@ export function ResolverStatusPanel({
             </span>
           )}
         </div>
+
         <Icon name={isOpen ? "expand_less" : "expand_more"} className="text-on-surface-variant text-sm" />
       </button>
 
@@ -135,6 +144,11 @@ export function ResolverStatusPanel({
                   <Icon name="error" className="text-xs" />
                   Hash mismatch (do not trust!)
                 </span>
+              ) : verification?.status === "unsupported" ? (
+                <span className="text-[11px] font-medium text-on-surface-variant flex items-center gap-1">
+                  <Icon name="help_outline" className="text-xs" />
+                  Rule kind not evaluated
+                </span>
               ) : null}
             </div>
 
@@ -173,7 +187,13 @@ export function ResolverStatusPanel({
                       : "text-on-surface-variant"
                 }`}
               >
-                {verification?.computedHash ?? (resolutionSpec ? "Computing…" : "No revealed spec to hash")}
+                {verification?.computedHash ?? (
+                  verification?.status === "unsupported"
+                    ? "N/A (unsupported kind)"
+                    : resolutionSpec
+                      ? "Computing…"
+                      : "No revealed spec to hash"
+                )}
               </code>
             </div>
           </div>
@@ -192,8 +212,36 @@ export function ResolverStatusPanel({
               </div>
             </div>
           )}
+
+          {/* Non-alarming Info on Unsupported */}
+          {verification?.status === "unsupported" && (
+            <div
+              role="note"
+              className="p-3 bg-surface-container border border-outline-variant rounded-lg text-on-surface-variant text-xs flex items-center gap-2"
+            >
+              <Icon name="info" className="text-base text-on-surface-variant" />
+              <div>
+                <span className="font-semibold text-on-surface">Notice: </span>
+                This market uses an advanced resolver rule ({resolutionSpec?.kind}). The client cannot independently verify this commitment format, so no claim is made either way.
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+function SourceTag({ source }: { source: "chain" | "backend" }) {
+  return (
+    <span
+      className={`text-[9px] px-1.5 py-0.2 rounded font-bold uppercase tracking-wider ml-1 ${
+        source === "chain"
+          ? "bg-secondary/15 text-secondary"
+          : "bg-surface-container-high text-on-surface-variant"
+      }`}
+    >
+      {source}
+    </span>
   );
 }

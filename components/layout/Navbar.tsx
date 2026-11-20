@@ -10,10 +10,12 @@ import WalletDropdown from "./WalletDropdown";
 import { HealthIndicator } from "./HealthIndicator";
 import { MobileNav } from "./MobileNav";
 import { NAV_ITEMS, isActive, activeHref } from "./nav-items";
+import { useAdminPermissions } from "@/lib/admin/useAdminPermissions";
 
 const Navbar = () => {
   const pathname = usePathname();
   const { unread } = useInbox();
+  const { can } = useAdminPermissions();
   const currentHref = activeHref(pathname);
 
   return (
@@ -32,7 +34,7 @@ const Navbar = () => {
 
           <NM.Root delayDuration={150} skipDelayDuration={300} className="relative z-20 hidden md:flex items-center h-full">
             <NM.List className="flex items-center gap-6 h-full pt-1 list-none m-0 p-0">
-              {NAV_ITEMS.map((item) => {
+              {NAV_ITEMS.filter((item) => !item.permission || can(item.permission)).map((item) => {
                 const itemIsActive = isActive(item, pathname);
 
                 if (item.children) {
