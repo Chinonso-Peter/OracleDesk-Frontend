@@ -6,6 +6,8 @@ import { useNetworkMutation as useMutation } from "@/lib/query/useNetworkMutatio
 import { isWalletCreator, settlementOf } from "@/lib/stellar/lp";
 import type { ViewedAddress } from "@/lib/stellar/identity";
 import type { ContractKey } from "@/lib/stellar/contract-check";
+import { assertCanWrite } from "@/lib/stellar/write-guard";
+import { useIntegrityMonitor } from "@/lib/stellar/integrity-monitor";
 import { Keypair, scValToNative, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import type { AssembledTransaction } from "@stellar/stellar-sdk/contract";
 import { useWallet } from "@/lib/contexts/WalletContext";
@@ -416,7 +418,7 @@ export function useUsdcTrustline(owner: string | null | undefined) {
 }
 
 export function useEnableUsdc() {
-  const signer = useWriteGuard();
+  const signer = useWriteGuard("usdc");
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async () => {
@@ -666,37 +668,35 @@ export function useVerifiedTrace(onChainTraceId: bigint | string | null | undefi
 
 // ─── Writes ─────────────────────────────────────────────────────────────────
 
-export function useWriteGuard(): (target?: ContractKey | "usdc") => Signer {
+export function useWriteGuard(target?: ContractKey | "usdc"): (explicitTarget?: ContractKey | "usdc") => Signer {
   const signer = useWalletSigner();
   const { isWrongNetwork, rpcNetwork, walletNetwork } = useWalletNetwork();
   const queryClient = useQueryClient();
   const updatePending = useUpdatePending();
+  const integrity = useIntegrityMonitor();
+
   // The guard's identity is stable, so the write hooks don't get a new
   // mutation function on every wallet change.
-  return useCallback(() => {
-    // Never sign with an outdated bundle (stale contract ids or slippage logic).
-    if (updatePending) {
-      throw new UserFacingError({ kind: "unknown", message: "Reload to update OracleDesk before signing." });
-    }
-    if (!signer) {
-      throw new UserFacingError({ kind: "disconnected", message: "Connect your wallet first." });
-    }
-    if (isWrongNetwork) {
-      throw new UserFacingError({ kind: "wrong-network", message: `Switch your wallet to ${NETWORK_LABEL} and try again.` });
-    }
-    if (rpcNetwork?.status === "mismatch") throw new UserFacingError({ kind: "wrong-network", message: "The RPC is on a different Stellar network. Signing is disabled." });
-    if (walletNetwork?.state === "unknown" && !walletNetwork.confirmedByUser) throw new UserFacingError({ kind: "wrong-network", message: `Confirm your wallet is on ${NETWORK_LABEL} first in the wallet menu.` });
-    // An unfunded account has no ledger entry, so building any transaction
-    // from it would fail with a raw SDK error. Refuse here, in plain words.
-    const account = queryClient.getQueryData<AccountReserveState>(stellarKeys.account(signer.publicKey));
-    if (account && !account.funded) {
-      throw new UserFacingError({
-        kind: "account-not-found",
-        message: "Your Stellar account isn't activated yet. Fund it with XLM first.",
-      });
-    }
-    return signer;
-  }, [signer, isWrongNetwork, rpcNetwork, walletNetwork, queryClient, updatePending]);
+  return useCallback((explicitTarget?: ContractKey | "usdc") => {
+    const activeTarget = explicitTarget ?? target;
+    const account = signer
+      ? queryClient.getQueryData<AccountReserveState>(stellarKeys.account(signer.publicKey))
+      : undefined;
+
+    assertCanWrite({
+      signer,
+      isWrongNetwork,
+      rpcStatus: rpcNetwork?.status,
+      walletNetworkConfirmed: walletNetwork?.state === "unknown" ? walletNetwork.confirmedByUser : true,
+      updatePending,
+      accountFunded: account ? account.funded : undefined,
+      integrity: integrity.results,
+      monitorStatus: integrity.status,
+      target: activeTarget,
+    });
+
+    return signer!;
+  }, [signer, isWrongNetwork, rpcNetwork, walletNetwork, queryClient, updatePending, integrity, target]);
 }
 
 export function useInvalidateAfterTrade() {
@@ -1147,7 +1147,7 @@ async function fetchTradePreflightInput(marketId: bigint, holder: string, includ
  * complete reliably.
  */
 export function useBuy() {
-  const guard = useWriteGuard();
+  const guard = useWriteGuard("marketCore");
   const queryClient = useQueryClient();
   const invalidate = useInvalidateAfterTrade();
   const runner = useTxRunner("marketCore");
@@ -1232,7 +1232,7 @@ export type SellParams = {
 }
 
 export function useSell() {
-  const guard = useWriteGuard();
+  const guard = useWriteGuard("marketCore");
   const queryClient = useQueryClient();
   const invalidate = useInvalidateAfterTrade();
   const runner = useTxRunner("marketCore");
@@ -1323,7 +1323,7 @@ export function useSell() {
 }
 
 export function useRedeem() {
-  const guard = useWriteGuard();
+  const guard = useWriteGuard("marketCore");
   const queryClient = useQueryClient();
   const invalidate = useInvalidateAfterTrade();
   const runner = useTxRunner("marketCore");
@@ -1390,7 +1390,7 @@ export function useRedeem() {
 
 /** The creator's LP pool is separate from their ordinary YES/NO position. */
 export function useClaimPoolRemainder() {
-  const guard = useWriteGuard();
+  const guard = useWriteGuard("marketCore");
   const invalidate = useInvalidateAfterTrade();
   const runner = useTxRunner("marketCore");
   const mutation = useMutation({
@@ -1448,7 +1448,7 @@ function effectsEqual(a: ExpiryEffect, b: ExpiryEffect): boolean {
 }
 
 export function useExpireMarket() {
-  const guard = useWriteGuard();
+  const guard = useWriteGuard("resolver");
   const queryClient = useQueryClient();
   const runner = useTxRunner("resolver");
   const mutation = useMutation({
@@ -1495,7 +1495,7 @@ export function useExpireMarket() {
 }
 
 export function useOpenFallback() {
-  const guard = useWriteGuard();
+  const guard = useWriteGuard("resolver");
   const queryClient = useQueryClient();
   const runner = useTxRunner("resolver");
   const mutation = useMutation({
@@ -1563,7 +1563,7 @@ export interface RedeemAllController {
 
 export function useRedeemAll(): RedeemAllController {
   const { address } = useWalletAddress();
-  const guard = useWriteGuard();
+  const guard = useWriteGuard("marketCore");
   const queryClient = useQueryClient();
   const [discoveryState, setDiscovery] = useState<RedeemDiscovery | null>(null);
   const [discoveryHolder, setDiscoveryHolder] = useState<string | null>(address);
@@ -1761,7 +1761,7 @@ export interface UsdcTransferParams {
 }
 
 export function useUsdcTransfer() {
-  const guard = useWriteGuard();
+  const guard = useWriteGuard("usdc");
   const queryClient = useQueryClient();
   const runner = useTxRunner("marketCore");
   const tracker = useTxTracker();
@@ -1981,7 +1981,7 @@ export function useMultisigSessions() {
  * and the trade fails with SlippageExceeded (error 12) if the price moves further.
  */
 export function usePrepareMultisig() {
-  const guard = useWriteGuard();
+  const guard = useWriteGuard("marketCore");
   return useMutation({
     mutationFn: async (input: MultisigPrepareInput): Promise<MultisigSession> => {
       const coordinator = guard();

@@ -60,12 +60,14 @@ export class ApiError extends Error {
   readonly retryAfterSeconds?: number;
   readonly errorCode: ApiCode;
   readonly serverMessage: string;
+  readonly headers?: Headers;
 
   constructor(
     errorOrStatus: ApiErrorPayload | number,
     statusOrCode?: number | string,
     retryAfterOrMessage?: number | string,
     detailsArg?: unknown,
+    headersArg?: Headers,
   ) {
     let payloadCode: string;
     let payloadMessage: string;
@@ -104,6 +106,7 @@ export class ApiError extends Error {
     this.retryAfterSeconds = retryAfterSeconds;
     this.errorCode = errorCode;
     this.serverMessage = payloadMessage;
+    this.headers = headersArg;
   }
 }
 
@@ -421,6 +424,7 @@ async function request<T>(
       response.status,
       parseRetryAfter(response.headers.get("Retry-After")),
       serverRequestId ?? requestId,
+      response.headers,
     );
   }
 
