@@ -67,7 +67,7 @@ const MarketItem = ({ title, status, volume, volumeLabel = "Liquidity" }: { titl
         <span className="text-[11px] text-on-surface-variant uppercase font-label-caps">{status}</span>
       </div>
     </div>
-    <div className="text-right">
+    <div className="text-end">
       <p className="font-data-mono text-data-mono text-on-surface">{volume}</p>
       <p className="text-[11px] text-on-surface-variant uppercase font-label-caps text-[10px]">{volumeLabel}</p>
     </div>

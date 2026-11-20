@@ -24,6 +24,14 @@ final URL stays under `API_URL`. Socket payloads are validated by
 `explorerAccount` and `ipfsUrl` return `null` for invalid input, and external
 URLs from backend data pass `safeExternalUrl` before being rendered as links.
 
+### Address entry
+
+All user-entered Stellar addresses in `app/` must go through `<AddressInput>` (`components/ui/address-input.tsx`), backed by `lib/stellar/address-policy.ts` and `lib/stellar/address-book.ts`. An ESLint `no-restricted-syntax` rule flags raw `StrKey.isValidEd25519PublicKey` calls in `app/**`.
+
+- **`watch`** (e.g. `/portfolio` watch form): warns on prefix/suffix look-alikes against known counterparties and requires a one-click confirmation. External `?watch=` links do not switch silently; they stage `pendingWatch` in `ViewedAddressProvider` for explicit confirmation.
+- **`authority`** (e.g. `/admin/agents`, future admin handovers): enforces expected address kind, blocks look-alikes until the user re-types the last 8 characters, and requires explicit confirmation on first-time addresses with `<AddressText>` showing full 4-character chunks and a deterministic 5×5 identicon.
+- **`recipient`** (transfers and treasury operations): same confirmation gates as `authority`, and offers to save confirmed recipients to the per-wallet, per-network local address book.
+
 ## Where data comes from
 
 The frontend has two sources that can disagree, and it says which one a value came from (the small `chain` / `backend` tags in the UI).

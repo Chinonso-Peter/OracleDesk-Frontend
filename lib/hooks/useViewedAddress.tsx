@@ -28,8 +28,14 @@ export interface ViewedAddressContextValue {
   isWatching: boolean;
   /** If the address in URL or input is invalid, stores the user-facing explanation. */
   watchError: string | null;
+  /** An external `?watch=` address awaiting explicit user confirmation. */
+  pendingWatch: ViewedAddress | null;
+  /** Accepts `pendingWatch` and switches to it. */
+  confirmPendingWatch: () => void;
+  /** Dismisses `pendingWatch` and removes `?watch=` from the URL. */
+  dismissPendingWatch: () => void;
   /** Sets a new watched address, validating format and updating URL & sessionStorage. */
-  setWatch: (address: string) => boolean;
+  setWatch: (address: string, opts?: { internal?: boolean }) => boolean;
   /** Clears the active watch, clearing sessionStorage, URL param, and relevant query caches. */
   clearWatch: () => void;
 }
@@ -58,14 +64,29 @@ export function ViewedAddressProvider({ children }: { children: ReactNode }) {
   const [watchedAddress, setWatchedAddress] = useState<ViewedAddress | null>(() => {
     if (typeof window === "undefined") return null;
     try {
-      const urlParam = new URLSearchParams(window.location.search).get("watch");
-      const candidate = urlParam ?? window.sessionStorage.getItem(SESSION_WATCH_KEY);
-      if (candidate) {
-        const val = validateWatchAddress(candidate);
+      const saved = window.sessionStorage.getItem(SESSION_WATCH_KEY);
+      if (saved) {
+        const val = validateWatchAddress(saved);
         if (val.ok) return val.address;
       }
     } catch {
       // Ignore sessionStorage / SSR errors
+    }
+    return null;
+  });
+
+  const [pendingWatch, setPendingWatch] = useState<ViewedAddress | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const urlParam = new URLSearchParams(window.location.search).get("watch");
+      if (!urlParam) return null;
+      const saved = window.sessionStorage.getItem(SESSION_WATCH_KEY);
+      const val = validateWatchAddress(urlParam);
+      if (val.ok && val.address !== saved) {
+        return val.address;
+      }
+    } catch {
+      // Ignore SSR errors
     }
     return null;
   });
@@ -90,15 +111,20 @@ export function ViewedAddressProvider({ children }: { children: ReactNode }) {
       try {
         const urlParam = new URLSearchParams(window.location.search).get("watch");
         if (urlParam !== null) {
+          const saved = window.sessionStorage.getItem(SESSION_WATCH_KEY);
           const val = validateWatchAddress(urlParam);
           if (val.ok) {
-            setWatchedAddress(val.address);
             setWatchError(null);
-            window.sessionStorage.setItem(SESSION_WATCH_KEY, val.address);
+            if (val.address === saved) {
+              setWatchedAddress(val.address);
+              setPendingWatch(null);
+            } else {
+              // External ?watch= link: require explicit confirmation before switching
+              setPendingWatch(val.address);
+            }
           } else {
-            setWatchedAddress(null);
+            setPendingWatch(null);
             setWatchError(val.error);
-            window.sessionStorage.removeItem(SESSION_WATCH_KEY);
           }
         }
       } catch {
@@ -114,6 +140,7 @@ export function ViewedAddressProvider({ children }: { children: ReactNode }) {
   const clearWatch = useCallback(() => {
     const previous = watchedAddress;
     setWatchedAddress(null);
+    setPendingWatch(null);
     setWatchError(null);
 
     if (typeof window !== "undefined") {
@@ -126,7 +153,6 @@ export function ViewedAddressProvider({ children }: { children: ReactNode }) {
     }
 
     if (previous) {
-      // Clean up cached balances and positions for the watched address to prevent memory leaks
       queryClient.removeQueries({ queryKey: ["stellar", "usdcBalance", previous] });
       queryClient.removeQueries({
         predicate: (query) => {
@@ -144,7 +170,8 @@ export function ViewedAddressProvider({ children }: { children: ReactNode }) {
   }, [watchedAddress, queryClient]);
 
   const setWatch = useCallback(
-    (input: string): boolean => {
+    (input: string, opts?: { internal?: boolean }): boolean => {
+      void opts;
       const val = validateWatchAddress(input);
       if (!val.ok) {
         setWatchError(val.error);
@@ -152,6 +179,7 @@ export function ViewedAddressProvider({ children }: { children: ReactNode }) {
       }
 
       setWatchedAddress(val.address);
+      setPendingWatch(null);
       setWatchError(null);
 
       if (typeof window !== "undefined") {
@@ -168,13 +196,22 @@ export function ViewedAddressProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const confirmPendingWatch = useCallback(() => {
+    if (!pendingWatch) return;
+    setWatch(pendingWatch, { internal: true });
+  }, [pendingWatch, setWatch]);
+
+  const dismissPendingWatch = useCallback(() => {
+    setPendingWatch(null);
+    updateUrlParam(watchedAddress ?? null);
+  }, [watchedAddress]);
+
   const connectedViewed = useMemo(
     () => toViewedAddress(connectedAddress),
     [connectedAddress],
   );
 
   const contextValue = useMemo<ViewedAddressContextValue>(() => {
-    // If watching own address, isWatching is false (no-op so trading remains enabled)
     if (watchedAddress) {
       const isSelf = Boolean(connectedViewed && watchedAddress === connectedViewed);
       return {
@@ -182,6 +219,9 @@ export function ViewedAddressProvider({ children }: { children: ReactNode }) {
         source: isSelf ? "connected" : "watch",
         isWatching: !isSelf,
         watchError,
+        pendingWatch,
+        confirmPendingWatch,
+        dismissPendingWatch,
         setWatch,
         clearWatch,
       };
@@ -193,6 +233,9 @@ export function ViewedAddressProvider({ children }: { children: ReactNode }) {
         source: "connected",
         isWatching: false,
         watchError,
+        pendingWatch,
+        confirmPendingWatch,
+        dismissPendingWatch,
         setWatch,
         clearWatch,
       };
@@ -203,10 +246,22 @@ export function ViewedAddressProvider({ children }: { children: ReactNode }) {
       source: null,
       isWatching: false,
       watchError,
+      pendingWatch,
+      confirmPendingWatch,
+      dismissPendingWatch,
       setWatch,
       clearWatch,
     };
-  }, [watchedAddress, connectedViewed, watchError, setWatch, clearWatch]);
+  }, [
+    watchedAddress,
+    connectedViewed,
+    watchError,
+    pendingWatch,
+    confirmPendingWatch,
+    dismissPendingWatch,
+    setWatch,
+    clearWatch,
+  ]);
 
   return (
     <ViewedAddressContext.Provider value={contextValue}>
