@@ -1,26 +1,43 @@
 "use client";
 
 import React from "react";
-import { useContractIntegrity, type IntegrityResult } from "@/lib/stellar/contract-check";
+import { useIntegrityMonitor, integrityMonitor, type ExecutableChange } from "@/lib/stellar/integrity-monitor";
+import { type IntegrityResult } from "@/lib/stellar/contract-check";
 import { explorerAccount } from "@/lib/stellar/config";
-import { AlertTriangle, ShieldAlert, ExternalLink, RefreshCw } from "lucide-react";
+import { AlertTriangle, ShieldAlert, CheckCircle2, ExternalLink, RefreshCw } from "lucide-react";
 
 export function IntegrityBanner() {
-  const { data: integrity, isLoading, refetch, isFetching } = useContractIntegrity();
+  const { status, results: integrity, changes } = useIntegrityMonitor();
 
-  if (isLoading || !integrity) {
+  if (status === "initial") {
     return null;
   }
 
-  const results = Object.values(integrity) as IntegrityResult[];
+  if (status === "rechecking") {
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        className="w-full bg-primary/10 border-b border-primary/30 text-on-surface px-4 py-2 text-xs z-50 sticky top-0 backdrop-blur-md"
+      >
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <RefreshCw className="w-3.5 h-3.5 text-primary animate-spin shrink-0" />
+            <span>Verifying contract specifications after detected on-chain upgrade…</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const results = integrity ? (Object.values(integrity) as IntegrityResult[]) : [];
   const failingContracts = results.filter(
     (r) => r.status === "mismatch" || r.status === "not-found" || r.status === "wrong-kind",
   );
   const uncheckedContracts = results.filter((r) => r.status === "unchecked");
-
   const allNotFound = results.length > 0 && results.every((r) => r.status === "not-found");
 
-  if (failingContracts.length > 0) {
+  if (status === "failed" || failingContracts.length > 0) {
     return (
       <div
         role="alert"
@@ -66,13 +83,33 @@ export function IntegrityBanner() {
             </div>
           </div>
           <button
-            onClick={() => void refetch()}
-            disabled={isFetching}
-            className="self-end md:self-center px-3 py-1.5 rounded bg-destructive/20 hover:bg-destructive/30 text-destructive text-xs font-medium inline-flex items-center gap-1.5 transition-colors shrink-0 disabled:opacity-50"
+            onClick={() => void integrityMonitor.probe()}
+            className="self-end md:self-center px-3 py-1.5 rounded bg-destructive/20 hover:bg-destructive/30 text-destructive text-xs font-medium inline-flex items-center gap-1.5 transition-colors shrink-0"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? "animate-spin" : ""}`} />
+            <RefreshCw className="w-3.5 h-3.5" />
             Recheck
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Show recent upgrade success notification if contracts were upgraded but interface remained compatible
+  if (status === "ok" && changes.length > 0) {
+    const latestChange = changes[0];
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        className="w-full bg-emerald-500/15 border-b border-emerald-500/30 text-emerald-800 dark:text-emerald-200 px-4 py-2 text-xs z-40 sticky top-0 backdrop-blur-md"
+      >
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            <span>
+              {latestChange.contract} was upgraded on-chain at ledger {latestChange.atLedger}; interface verified compatible.
+            </span>
+          </div>
         </div>
       </div>
     );
@@ -96,11 +133,10 @@ export function IntegrityBanner() {
             </span>
           </div>
           <button
-            onClick={() => void refetch()}
-            disabled={isFetching}
+            onClick={() => void integrityMonitor.probe()}
             className="text-amber-300 hover:text-amber-100 font-medium inline-flex items-center gap-1 shrink-0"
           >
-            <RefreshCw className={`w-3 h-3 ${isFetching ? "animate-spin" : ""}`} />
+            <RefreshCw className="w-3 h-3" />
             Retry
           </button>
         </div>

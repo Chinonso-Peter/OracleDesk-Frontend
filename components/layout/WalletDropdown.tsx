@@ -11,11 +11,12 @@ import { PendingValue } from "@/components/pending-value";
 import { DevProfiler } from "@/lib/dev/profiler";
 import { formatUsdc, formatXlm } from "@/lib/stellar/units";
 import { AddressText } from "@/components/ui/address-text";
+import { LiveRegion } from "@/components/ui/live-region";
 
 const WalletDropdownBody = () => {
   const { address, isConnected } = useWalletAddress();
   const { isWrongNetwork, walletNetwork, confirmUnknownNetwork } = useWalletNetwork();
-  const { isConnecting, error } = useWalletSession();
+  const { isConnecting, error, authStep, powProgress } = useWalletSession();
   const { openModal, disconnect } = useWalletActions();
   const { isWatching, viewed, clearWatch } = useViewedAddress();
   const [copied, setCopied] = useState(false);
@@ -25,6 +26,28 @@ const WalletDropdownBody = () => {
   const enableUsdc = useEnableUsdc();
   const reserve = useAccountReserve(address);
   const rpcNetwork = useRpcNetwork();
+
+  if (authStep === "pow") {
+    const percent = Math.round((powProgress ?? 0) * 100);
+    const message = `Verifying your browser… ${percent}%`;
+    return (
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-container-low border border-outline-variant rounded-lg">
+        <LiveRegion message="Verifying your browser" />
+        <span className="text-xs font-mono font-medium text-on-surface flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+          {message}
+        </span>
+        <button
+          type="button"
+          onClick={() => void disconnect()}
+          aria-label="Cancel verification"
+          className="text-xs text-on-surface-variant hover:text-primary underline px-1.5 py-0.5 rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+        >
+          Cancel
+        </button>
+      </div>
+    );
+  }
 
   if (!isConnected || !address) {
     return (

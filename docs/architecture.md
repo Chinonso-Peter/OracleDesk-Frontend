@@ -84,6 +84,18 @@ machine (`SESSION_SYNCED`). Disconnect and wallet switches call
 logout → sign-in, so a late logout cannot clear the new cookie).
 `POST /auth/verify` is sent with `X-Session-Mode: cookie`.
 
+### Login proof of work
+
+During challenge issuance bursts (above `AUTH_POW_THRESHOLD_PER_MIN`), the backend gates `POST /auth/challenge` behind a hashcash-style proof of work, responding with `429 POW_REQUIRED` and challenge details `{ bits, salt, retryAfterSecs }` (plus `X-Auth-PoW: bits=<n>; salt=<hex>` and `Retry-After`).
+
+- **Preimage format:** UTF-8 encoded string `oracledesk-auth:${account}:${nonce}:${salt}`.
+- **Base account rule:** For Stellar muxed addresses (`M...`), the base Ed25519 `G...` account is extracted before hashing so the preimage matches the backend's `identity.account` verification.
+- **Solver & Workers:** Solving executes in a dedicated module Web Worker (`lib/auth/pow.worker.ts`). When `navigator.hardwareConcurrency >= 4`, two workers search disjoint nonce ranges in parallel. The solver uses incremental `Sha256` midstate cloning to avoid recomputing the fixed 64-byte prefix block.
+- **Main-thread fallback:** If Web Workers or CSP worker execution are unavailable, solving falls back to `lib/auth/pow-runner.ts` which yields via `scheduler.yield()` or microtask timeouts every 2,000 hashes (< 50ms per slice).
+- **Difficulty ceiling:** Controlled by `NEXT_PUBLIC_AUTH_POW_MAX_BITS` (default `24`). If requested bits exceed this ceiling, sign-in refuses with a clean user-facing error rather than exhausting device resources.
+- **Retries & Expiry:** At most two solve retries per attempt (including handling `POW_INVALID` via `GET /auth/challenge/pow`). `Retry-After` headers are strictly respected before re-requesting.
+- **CSP compliance:** Loaded with `new Worker(new URL(...), { type: "module" })` conforming to CSP `worker-src 'self'`.
+
 One-shot migration: on first load in cookie mode, a legacy
 `oracledesk_token` is exchanged with `POST /auth/upgrade` and then deleted
 (success or 401). A network failure keeps it for the next load. Cross-site
@@ -408,14 +420,18 @@ Instead of independent intervals across components, `LedgerClock` (`lib/stellar/
 - **Event-Driven Invalidation**: Mounted in `WalletProvider` via `LedgerInvalidator` (`lib/stellar/ledger-invalidation.ts`). On new ledgers, `getEvents` queries `marketCore` and `usdc` to invalidate queries matching affected market IDs and user balances. Gaps > 120 ledgers perform a broad invalidation.
 - **Query Cache Policies**: On-chain queries have `staleTime: Infinity` with a 5-minute fallback poll; backend queries set `refetchIntervalInBackground: false`.
 
-## Contract integrity check (`lib/stellar/contract-check.ts`)
+## Contract integrity check (`lib/stellar/contract-check.ts`, `lib/stellar/integrity-monitor.ts`)
 
-At startup, the frontend verifies that the deployed contracts match the bundled TypeScript bindings:
+The frontend verifies that the deployed contracts match the bundled TypeScript bindings both at startup and dynamically on ledger ticks:
 
 1. **Instance Check**: Queries persistent contract instance keys for all configured contracts (`marketCore`, `treasury`, `resolver`, `reasoningRegistry`, and `usdc`) in a single batched `getLedgerEntries` call.
 2. **Wasm Spec Fingerprint**: For Wasm contracts, extracts the executable's `wasmHash`, fetches the contract code entry if not cached, parses the embedded `contractspecv0` section, normalizes spec entries (stripping doc fields and sorting by kind and name), and computes a SHA-256 fingerprint. The fingerprint is cached in `sessionStorage` per content-addressed `wasmHash`.
 3. **Stellar Asset Contract (SAC) Verification**: For USDC, verifies that the instance executable is `contractExecutableStellarAsset`, checks that the contract ID matches `new Asset(code, issuer).contractId(NETWORK_PASSPHRASE)` for `NEXT_PUBLIC_USDC_ASSET`, and simulates `name()`.
-4. **Write-Path Gating**: `useContractIntegrity()` evaluates network status. If any contract status is `mismatch`, `not-found`, or `wrong-kind`, `useWriteGuard()` blocks transaction signing with a `UserFacingError({ kind: "contract" })`, and `IntegrityBanner.tsx` renders a non-dismissable alert detailing the discrepancies. Temporary RPC connectivity failures yield `unchecked` and do not block writes.
+4. **Live Integrity Monitor (`lib/stellar/integrity-monitor.ts`)**: Runs on ledger clock ticks. Monitors contract executables and detects upgrades in real time. On executable change or upgrade events, it immediately invalidates the signing epoch via `invalidateSigningEpoch()`, sets status to `rechecking`, purges caches, and verifies the new spec against the bundled definitions.
+5. **Pre-Sign Freshness & Write-Path Gating (`lib/stellar/write-guard.ts`, `lib/stellar/tx-lifecycle.ts`)**:
+   - `assertCanWrite()` blocks writes when `monitorStatus` is `initial`, `rechecking`, or `failed`, or when the targeted contract status is not `ok`.
+   - Right before requesting wallet signature (`awaiting-signature`), `ensureFresh()` guarantees that ledger-check age is < 15 seconds, forcing an immediate probe if stale.
+   - `IntegrityBanner.tsx` displays live state: `rechecking` (yellow), `failed` (red, with reload/details), or brief `ok` notice on upgrade without blocking normal operations.
 
 ## Viewed address vs signer (Watch-only mode)
 

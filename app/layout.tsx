@@ -11,6 +11,7 @@ import { PwaRegistrar } from "@/components/pwa/pwa-registrar";
 import { DebugMount } from "@/components/debug/debug-mount";
 import { RpcDegradedBanner } from "@/components/debug/RpcPanel";
 import { NetworkConsistencyBanner } from "@/components/layout/NetworkConsistencyBanner";
+import { IntegrityBanner } from "@/components/layout/IntegrityBanner";
 import { BuildIdentityBanner } from "@/components/layout/BuildIdentityBanner";
 import { CopyTradeReconciler } from "@/components/copy-trade/CopyTradeReconciler";
 import { ViewedAddressProvider } from "@/lib/hooks/useViewedAddress";
@@ -85,6 +86,7 @@ export default function RootLayout({
               <HealthProvider>
                 <InboxProvider>
                   <Navbar />
+                  <IntegrityBanner />
                   <NetworkConsistencyBanner />
                   <RpcDegradedBanner />
                   <div id="main-content" tabIndex={-1} className="flex-1 flex flex-col outline-none">
