@@ -2,6 +2,8 @@ import { UserFacingError } from "./errors";
 import type { Signer } from "./clients";
 import { asSignerAddress, type SignerAddress } from "./identity";
 import type { IntegrityResult, ContractKey } from "./contract-check";
+import type { MonitorStatus } from "./integrity-monitor";
+import { NETWORK_LABEL, NETWORK_PASSPHRASE, TESTNET_PASSPHRASE } from "./config";
 
 export interface WriteGuardContext {
   signer: Signer | null;
@@ -11,7 +13,10 @@ export interface WriteGuardContext {
   accountFunded?: boolean;
   updatePending?: boolean;
   integrity?: Record<string, IntegrityResult> | null;
+  monitorStatus?: MonitorStatus;
   target?: ContractKey | "usdc";
+  rpcStatus?: string;
+  walletNetworkConfirmed?: boolean;
 }
 
 /**
@@ -33,7 +38,13 @@ export function assertCanWrite(ctx: WriteGuardContext): SignerAddress {
     throw new UserFacingError({ kind: "disconnected", message: "Connect your wallet first." });
   }
   if (ctx.isWrongNetwork) {
-    throw new UserFacingError({ kind: "wrong-network", message: "Switch your wallet to Stellar Testnet and try again." });
+    throw new UserFacingError({ kind: "wrong-network", message: `Switch your wallet to ${NETWORK_LABEL} and try again.` });
+  }
+  if (ctx.rpcStatus === "mismatch") {
+    throw new UserFacingError({ kind: "wrong-network", message: "The RPC is on a different Stellar network. Signing is disabled." });
+  }
+  if (ctx.walletNetworkConfirmed === false) {
+    throw new UserFacingError({ kind: "wrong-network", message: `Confirm your wallet is on ${NETWORK_LABEL} first in the wallet menu.` });
   }
   if (ctx.isWatching && ctx.watchedAddress && ctx.watchedAddress !== ctx.signer.publicKey) {
     throw new UserFacingError({
@@ -41,6 +52,29 @@ export function assertCanWrite(ctx: WriteGuardContext): SignerAddress {
       message: "You're viewing another address. Connect your own wallet to trade.",
     });
   }
+
+  if (ctx.monitorStatus === "initial" || ctx.monitorStatus === "rechecking") {
+    throw new UserFacingError({
+      kind: "contract",
+      message: "Verifying contracts… try again in a moment.",
+    });
+  }
+
+  if (ctx.monitorStatus === "failed") {
+    throw new UserFacingError({
+      kind: "contract",
+      message: "This app is out of date with the deployed contracts. Trading is disabled until it's updated.",
+    });
+  }
+
+  // Blocking on mainnet for unchecked RPC status; allowed with warning on testnet
+  if (ctx.monitorStatus === "unchecked" && NETWORK_PASSPHRASE !== TESTNET_PASSPHRASE) {
+    throw new UserFacingError({
+      kind: "contract",
+      message: "Contract integrity could not be verified due to RPC connectivity issues. Signing disabled on mainnet.",
+    });
+  }
+
   if (ctx.integrity && ctx.target) {
     const res = ctx.integrity[ctx.target];
     if (res && (res.status === "mismatch" || res.status === "not-found" || res.status === "wrong-kind")) {
@@ -50,6 +84,7 @@ export function assertCanWrite(ctx: WriteGuardContext): SignerAddress {
       });
     }
   }
+
   if (ctx.accountFunded === false) {
     throw new UserFacingError({
       kind: "account-not-found",
