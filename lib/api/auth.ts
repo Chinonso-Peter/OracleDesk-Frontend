@@ -10,6 +10,7 @@ import {
   storeAuthSession,
   isAuthError,
   replaceToken,
+  type ApiRequestOptions,
 } from "./client";
 import { validateSEP10Challenge, type SEP10ValidationError } from "@/lib/stellar/sep10-validator";
 import { broadcastSessionChange } from "./cross-tab-sync";
@@ -17,7 +18,7 @@ import { TransactionBuilder } from "@stellar/stellar-sdk";
 import { NETWORK_PASSPHRASE } from "@/lib/stellar/config";
 import { NetworkMismatchError } from "@/lib/stellar/network-check";
 import { sha256Hex } from "@/lib/stellar/trace";
-import { withOperation } from "@/lib/observability/tracing";
+import { withOperation, type TraceCtx } from "@/lib/observability/tracing";
 import { AuthChallengeSchema } from "./schemas";
 
 export interface AuthSession {
@@ -54,11 +55,21 @@ export async function requestChallenge(address: string, options?: ApiRequestOpti
   return data;
 }
 
-export async function verifyChallenge(address: string, signed: string, isCurrent: () => boolean = () => true) {
+export async function verifyChallenge(
+  address: string,
+  signed: string,
+  isCurrent: () => boolean = () => true,
+  trace?: TraceCtx,
+  extraHeaders?: Record<string, string>,
+) {
   const { data } = await apiClient.post<AuthSession>(
     "/auth/verify",
     { address, signed },
-    SESSION_MODE === "cookie" ? { "X-Session-Mode": "cookie" } : undefined,
+    {
+      ...(SESSION_MODE === "cookie" ? { "X-Session-Mode": "cookie" } : {}),
+      ...extraHeaders,
+    },
+    { trace },
   );
   if (!isCurrent() || data.walletAddress !== address) throw new Error("Your account changed; sign in again.");
   storeAuthSession(data);
@@ -192,7 +203,8 @@ export async function signInWithWallet(
 ): Promise<AuthSession> {
   // Serialize logout → sign-in so a late logout response cannot clear the new cookie.
   await pendingLogout.catch(() => undefined);
-  const challenge = await requestChallenge(address);
+  return withOperation("sign-in", async (trace) => {
+    const challenge = await requestChallenge(address, { trace });
 
     if (challenge.networkPassphrase !== NETWORK_PASSPHRASE) {
       throw new NetworkMismatchError(NETWORK_PASSPHRASE, challenge.networkPassphrase);
